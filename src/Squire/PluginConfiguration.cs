@@ -1,18 +1,36 @@
 using Dalamud.Configuration;
 using Franthropy.Dalamud.Equipment;
+using MarketMafioso.Squire;
+using Newtonsoft.Json;
 
 namespace Squire;
 
 [Serializable]
-public sealed class PluginConfiguration : IPluginConfiguration
+public sealed class PluginConfiguration : IPluginConfiguration, ISquireConfigurationStore
 {
     public int Version { get; set; } = 1;
     public string PluginInstanceId { get; set; } = Guid.NewGuid().ToString("N");
     public SquireSettings Settings { get; set; } = new();
+    public MarketMafioso.Squire.SquireConfiguration FeatureSettings { get; set; } = new();
+    public string? OutfitterRouteExecutionStateJson { get; set; }
+    public bool EnableMarketAcquisitionDryRunTools { get; set; }
+    public MarketMafioso.PersistedMarketAcquisitionRequestDocument? ActiveMarketAcquisitionRequestDocument { get; set; }
+    public MarketMafioso.PersistedMarketAcquisitionClaim? ActiveMarketAcquisitionClaim { get; set; }
     public LegacyMmfMigrationReceipt? LegacyMmfMigration { get; set; }
     public bool EnableAgentBridge { get; set; }
     public bool EnableAgentBridgeAudit { get; set; }
     public string AgentBridgeProtectedAccessToken { get; set; } = string.Empty;
+
+    [JsonIgnore]
+    internal Action SaveAction { get; set; } = () => { };
+
+    MarketMafioso.Squire.SquireConfiguration ISquireConfigurationStore.Squire
+    {
+        get => FeatureSettings;
+        set => FeatureSettings = value;
+    }
+
+    public void Save() => SaveAction();
 }
 
 [Serializable]
@@ -167,4 +185,3 @@ public sealed record LegacyMmfMigrationReceipt(
     DateTimeOffset ImportedAtUtc,
     int CleanupRuleCount,
     int CharacterRuleCount);
-

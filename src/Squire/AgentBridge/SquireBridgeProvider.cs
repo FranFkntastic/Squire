@@ -16,6 +16,10 @@ public sealed record SquireBridgeTruth(
 
 public sealed class SquireBridgeProvider
 {
+    private static readonly IReadOnlyList<AgentBridgeCaptureSurfaceDescriptor> CaptureSurfaces =
+    [
+        new("squire.main-window", "Squire window", 10, IsDefault: true),
+    ];
     private static readonly IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> ReviewSurfaces =
     [
         new("squire", "Squire", "open-main-window", "squire", 10),
@@ -24,16 +28,26 @@ public sealed class SquireBridgeProvider
     private readonly Func<SquireBridgeTruth> createTruth;
     private readonly Action openMainWindow;
     private readonly Action closeMainWindow;
+    private readonly AgentBridgeUiReviewRegistry reviewRegistry;
 
-    public SquireBridgeProvider(Func<SquireBridgeTruth> createTruth, Action openMainWindow, Action closeMainWindow)
+    public SquireBridgeProvider(
+        Func<SquireBridgeTruth> createTruth,
+        Action openMainWindow,
+        Action closeMainWindow,
+        AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.createTruth = createTruth;
         this.openMainWindow = openMainWindow;
         this.closeMainWindow = closeMainWindow;
+        this.reviewRegistry = reviewRegistry;
     }
 
     public SquireBridgeTruth CreateTruth() => createTruth();
     public IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces() => ReviewSurfaces;
+    public IReadOnlyList<AgentBridgeCaptureSurfaceDescriptor> GetCaptureSurfaces() => CaptureSurfaces;
+    public AgentBridgeUiReviewFrame GetControlSurface() => reviewRegistry.Snapshot();
+    public AgentBridgeUiControlReview ReviewControl(string controlId) => reviewRegistry.Review(controlId);
+    public AgentBridgeUiControlInvocation InvokeControl(string controlId, long frameId) => reviewRegistry.Invoke(controlId, frameId);
 
     public bool TryOpenMainWindow(string target)
     {
@@ -45,4 +59,3 @@ public sealed class SquireBridgeProvider
 
     public void CloseMainWindow() => closeMainWindow();
 }
-

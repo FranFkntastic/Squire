@@ -2,22 +2,32 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using Squire.Persistence;
 using System.Numerics;
+using MarketMafioso.Windows.Squire;
 
 namespace Squire.UI;
 
-public sealed class SquireWindow : Window
+internal sealed class SquireWindow : Window
 {
     private readonly PluginConfiguration configuration;
     private readonly Action save;
     private readonly LegacyMmfImporter importer;
     private LegacyMmfImportPreview migration;
+    private readonly SquireTabPanel featurePanel;
+    private readonly Franthropy.Dalamud.AgentBridge.AgentBridgeUiReviewRegistry reviewRegistry;
 
-    public SquireWindow(PluginConfiguration configuration, Action save, LegacyMmfImporter importer)
+    public SquireWindow(
+        PluginConfiguration configuration,
+        Action save,
+        LegacyMmfImporter importer,
+        SquireTabPanel featurePanel,
+        Franthropy.Dalamud.AgentBridge.AgentBridgeUiReviewRegistry? reviewRegistry = null)
         : base("Squire###SquireStandalone")
     {
         this.configuration = configuration;
         this.save = save;
         this.importer = importer;
+        this.featurePanel = featurePanel;
+        this.reviewRegistry = reviewRegistry ?? new();
         migration = importer.Preview();
         SizeConstraints = new WindowSizeConstraints
         {
@@ -28,24 +38,12 @@ public sealed class SquireWindow : Window
 
     public override void Draw()
     {
-        if (!ImGui.BeginTabBar("SquireWorkspaces"))
-            return;
-        if (ImGui.BeginTabItem("Overview"))
-        {
+        reviewRegistry.BeginFrame();
+        featurePanel.Draw();
+        ImGui.Separator();
+        if (ImGui.CollapsingHeader("Migration and integration"))
             DrawOverview();
-            ImGui.EndTabItem();
-        }
-        if (ImGui.BeginTabItem("Cleanup policy"))
-        {
-            DrawCleanupPolicy();
-            ImGui.EndTabItem();
-        }
-        if (ImGui.BeginTabItem("Integration"))
-        {
-            DrawIntegration();
-            ImGui.EndTabItem();
-        }
-        ImGui.EndTabBar();
+        reviewRegistry.EndFrame();
     }
 
     private void DrawOverview()
@@ -101,4 +99,3 @@ public sealed class SquireWindow : Window
         save();
     }
 }
-

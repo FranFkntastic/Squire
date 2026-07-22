@@ -30,9 +30,9 @@ public sealed class LegacyMmfImporterTests
         var imported = importer.Import();
 
         Assert.True(imported.AlreadyImported);
-        Assert.False(configuration.Settings.ProtectBlueAndPurpleGear);
-        Assert.Single(configuration.Settings.CleanupRules);
-        Assert.Single(configuration.Settings.RulesByCharacter["123"]);
+        Assert.False(configuration.FeatureSettings.ProtectBlueAndPurpleGear);
+        Assert.Single(configuration.FeatureSettings.CleanupRules);
+        Assert.Single(configuration.FeatureSettings.RulesByCharacter["123"]);
         Assert.NotNull(configuration.LegacyMmfMigration);
         Assert.Equal(1, saves);
         Assert.True(importer.Preview().AlreadyImported);
@@ -70,7 +70,7 @@ public sealed class LegacyMmfImporterTests
         Assert.False(preview.CanImport);
         Assert.False(preview.AlreadyImported);
         Assert.Contains("will not overwrite", preview.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal("first", configuration.Settings.Search);
+        Assert.Equal("first", configuration.FeatureSettings.Search);
     }
 
     private sealed class TemporaryDirectory : IDisposable

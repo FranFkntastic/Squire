@@ -125,7 +125,25 @@ public sealed class AgentBridgeHost : IDisposable
             case "get-review-surfaces":
                 return AgentBridgeResponse.Ok("Review surfaces captured.", provider.GetReviewSurfaces());
             case "get-capture-surfaces":
-                return AgentBridgeResponse.Ok("Squire does not yet advertise a capture presentation.", Array.Empty<object>());
+                return AgentBridgeResponse.Ok("Squire capture surfaces captured.", provider.GetCaptureSurfaces());
+            case "get-control-surface":
+                AgentBridgeUiReviewFrame? frame = null;
+                await dispatchOnFramework(() => frame = provider.GetControlSurface(), cancellationToken).ConfigureAwait(false);
+                return AgentBridgeResponse.Ok("Squire rendered control surface captured.", frame);
+            case "review-control":
+                AgentBridgeUiControlReview? review = null;
+                await dispatchOnFramework(() => review = provider.ReviewControl(request.Target ?? string.Empty), cancellationToken).ConfigureAwait(false);
+                return review!.Control is not null
+                    ? AgentBridgeResponse.Ok("Rendered control reviewed.", review)
+                    : new AgentBridgeResponse { Success = false, Message = "The requested control is not rendered.", Receipt = review };
+            case "invoke-control":
+                if (request.FrameId is not { } frameId)
+                    return AgentBridgeResponse.Fail("A rendered frame id is required.");
+                AgentBridgeUiControlInvocation? invocation = null;
+                await dispatchOnFramework(() => invocation = provider.InvokeControl(request.Target ?? string.Empty, frameId), cancellationToken).ConfigureAwait(false);
+                return invocation!.Success
+                    ? AgentBridgeResponse.Ok(invocation.Message, invocation)
+                    : new AgentBridgeResponse { Success = false, Message = invocation.Message, Receipt = invocation };
             case "open-main-window":
                 var opened = false;
                 await dispatchOnFramework(() => opened = provider.TryOpenMainWindow(request.Target ?? "squire"), cancellationToken).ConfigureAwait(false);

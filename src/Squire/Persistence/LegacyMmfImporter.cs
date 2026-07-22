@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using MarketMafioso.Squire;
 
 namespace Squire.Persistence;
 
@@ -35,7 +37,7 @@ public sealed class LegacyMmfImporter
         {
             var sourceBytes = File.ReadAllBytes(sourcePath);
             var sourceSha256 = Convert.ToHexString(SHA256.HashData(sourceBytes));
-            var document = JsonSerializer.Deserialize<LegacyMmfConfiguration>(sourceBytes, jsonOptions);
+            var document = DeserializeLegacyConfiguration(sourceBytes);
             if (document?.Squire is null)
                 return new(true, false, false, "MarketMafioso has no readable Squire configuration.", sourceSha256);
             if (HasUnresolvedRouteAuthority(document.OutfitterRouteExecutionStateJson))
@@ -96,10 +98,10 @@ public sealed class LegacyMmfImporter
             return preview;
 
         var sourceBytes = File.ReadAllBytes(sourcePath);
-        var document = JsonSerializer.Deserialize<LegacyMmfConfiguration>(sourceBytes, jsonOptions)
+        var document = DeserializeLegacyConfiguration(sourceBytes)
             ?? throw new InvalidDataException("MarketMafioso configuration was empty.");
-        target.Settings = document.Squire ?? throw new InvalidDataException("MarketMafioso Squire configuration was missing.");
-        Normalize(target.Settings);
+        target.FeatureSettings = document.Squire ?? throw new InvalidDataException("MarketMafioso Squire configuration was missing.");
+        Normalize(target.FeatureSettings);
         target.LegacyMmfMigration = new(
             preview.SourceSha256,
             DateTimeOffset.UtcNow,
@@ -113,7 +115,31 @@ public sealed class LegacyMmfImporter
         !string.IsNullOrWhiteSpace(routeStateJson) &&
         !string.Equals(routeStateJson.Trim(), "null", StringComparison.OrdinalIgnoreCase);
 
-    private static void Normalize(SquireSettings settings)
+    private LegacyMmfConfiguration? DeserializeLegacyConfiguration(ReadOnlySpan<byte> sourceBytes)
+    {
+        var root = JsonNode.Parse(sourceBytes);
+        RemoveNewtonsoftTypeMetadata(root);
+        return root?.Deserialize<LegacyMmfConfiguration>(jsonOptions);
+    }
+
+    private static void RemoveNewtonsoftTypeMetadata(JsonNode? node)
+    {
+        if (node is JsonObject jsonObject)
+        {
+            jsonObject.Remove("$type");
+            foreach (var child in jsonObject.ToArray())
+                RemoveNewtonsoftTypeMetadata(child.Value);
+            return;
+        }
+
+        if (node is JsonArray jsonArray)
+        {
+            foreach (var child in jsonArray)
+                RemoveNewtonsoftTypeMetadata(child);
+        }
+    }
+
+    private static void Normalize(SquireConfiguration settings)
     {
         settings.CleanupRules ??= [];
         settings.BuiltInRuleOverrides ??= new();
@@ -126,8 +152,7 @@ public sealed class LegacyMmfImporter
 
     private sealed class LegacyMmfConfiguration
     {
-        public SquireSettings? Squire { get; init; }
+        public SquireConfiguration? Squire { get; init; }
         public string? OutfitterRouteExecutionStateJson { get; init; }
     }
 }
-

@@ -16,6 +16,16 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="Fixtures\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <Compile Remove="Features\StandaloneSquireIpcClientTests.cs" />
+    <Compile Remove="Features\SquireConfigurationTests.cs" />
+  </ItemGroup>
+  <ItemGroup>
     <Reference Include="Dalamud">
       <HintPath>$(AppData)\XIVLauncher\addon\Hooks\dev\Dalamud.dll</HintPath>
       <Private>true</Private>

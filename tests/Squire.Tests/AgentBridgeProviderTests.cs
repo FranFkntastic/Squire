@@ -1,4 +1,5 @@
 using Squire.AgentBridge;
+using Franthropy.Dalamud.AgentBridge;
 using Xunit;
 
 namespace Squire.Tests;
@@ -10,9 +11,10 @@ public sealed class AgentBridgeProviderTests
     {
         var opened = false;
         var provider = new SquireBridgeProvider(
-            () => new SquireBridgeTruth(1, "provider", 1, "test", false, "migration-shell", "Outfitter", 0, 0, null),
+            () => new SquireBridgeTruth(1, "provider", 1, "test", false, "standalone", "Outfitter", 0, 0, null),
             () => opened = true,
-            () => { });
+            () => { },
+            new AgentBridgeUiReviewRegistry());
 
         var surface = Assert.Single(provider.GetReviewSurfaces());
 

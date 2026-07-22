@@ -16,15 +16,31 @@
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <FranthropyDalamudProject Condition="'$(FranthropyDalamudProject)' == ''">..\..\..\Franthropy\src\Franthropy.Dalamud\Franthropy.Dalamud.csproj</FranthropyDalamudProject>
+    <CraftArchitectCoreProject Condition="'$(CraftArchitectCoreProject)' == ''">..\..\..\FFXIV Craft Architect C# Edition\src\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj</CraftArchitectCoreProject>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="$(FranthropyDalamudProject)" SetConfiguration="Configuration=$(Configuration)" />
+    <ProjectReference Include="$(CraftArchitectCoreProject)" SetConfiguration="Configuration=$(Configuration)" />
     <InternalsVisibleTo Include="Squire.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="Compatibility\Windows\MarketAcquisitionRequestBuilder\AcquisitionRequestTableStyle.cs" />
+    <Compile Remove="Compatibility\Windows\MarketAcquisitionRequestBuilder\Craft*.cs" />
+    <Compile Remove="Compatibility\Windows\MarketAcquisitionRequestBuilder\MarketAcquisitionRequestBuilderContext.cs" />
+    <Compile Remove="Compatibility\Windows\MarketAcquisitionRequestBuilder\MarketAcquisitionRequestBuilderPanel.cs" />
+    <Compile Remove="Compatibility\Windows\MarketAcquisitionRequestBuilder\MarketAcquisitionWorkbenchFinalizationPresenter.cs" />
+    <Compile Remove="Compatibility\Windows\MarketAcquisitionRequestBuilder\RequestLineInputValidator.cs" />
+    <Compile Remove="Compatibility\Windows\MarketAcquisitionRequestBuilder\RequestPricingFormatter.cs" />
   </ItemGroup>
 
   <Target Name="ValidateFranthropyProject" BeforeTargets="PrepareForBuild">
     <Error Condition="!Exists('$(FranthropyDalamudProject)')" Text="Franthropy.Dalamud was not found at '$(FranthropyDalamudProject)'. Clone Franthropy beside Squire or set FranthropyDalamudProject." />
+  </Target>
+
+  <Target Name="ValidateCraftArchitectProject" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(CraftArchitectCoreProject)')" Text="Craft Architect Core was not found at '$(CraftArchitectCoreProject)'. Clone it beside Squire or set CraftArchitectCoreProject." />
   </Target>
 
   <Target Name="RejectDebugProjectReferencesInRelease" AfterTargets="ResolveProjectReferences" Condition="'$(Configuration)' == 'Release'">
@@ -34,4 +50,3 @@
     <Error Condition="'@(_DebugProjectReference)' != ''" Text="Release build resolved Debug project output: @(_DebugProjectReference)." />
   </Target>
 </Project>
-

@@ -1,0 +1,17 @@
+author: FranFkntastic
+name: Squire
+repo_url: https://github.com/FranFkntastic/Squire
+punchline: Equipment planning, reviewed cleanup, and acquisition-aware outfitting.
+description: |
+  Squire is a standalone equipment workbench for planning useful loadouts,
+  reviewing cleanup decisions, and preparing explicitly approved acquisitions.
+  Use /squire to open Squire.
+tags:
+  - Inventory
+  - Gear
+  - Utility
+  - Franthropy
+category_tags:
+  - Utility
+  - Other
+

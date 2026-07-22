@@ -1,0 +1,37 @@
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <PropertyGroup>
+    <Title>Squire</Title>
+    <Description>Standalone equipment planning, reviewed cleanup, and acquisition-aware outfitting.</Description>
+    <AssemblyName>Squire</AssemblyName>
+    <RootNamespace>Squire</RootNamespace>
+    <Version>0.1.0.0</Version>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+    <FranthropyDalamudProject Condition="'$(FranthropyDalamudProject)' == ''">..\..\..\Franthropy\src\Franthropy.Dalamud\Franthropy.Dalamud.csproj</FranthropyDalamudProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(FranthropyDalamudProject)" SetConfiguration="Configuration=$(Configuration)" />
+    <InternalsVisibleTo Include="Squire.Tests" />
+  </ItemGroup>
+
+  <Target Name="ValidateFranthropyProject" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(FranthropyDalamudProject)')" Text="Franthropy.Dalamud was not found at '$(FranthropyDalamudProject)'. Clone Franthropy beside Squire or set FranthropyDalamudProject." />
+  </Target>
+
+  <Target Name="RejectDebugProjectReferencesInRelease" AfterTargets="ResolveProjectReferences" Condition="'$(Configuration)' == 'Release'">
+    <ItemGroup>
+      <_DebugProjectReference Include="@(_ResolvedProjectReferencePaths)" Condition="$([System.String]::Copy('%(FullPath)').Contains('\bin\Debug\'))" />
+    </ItemGroup>
+    <Error Condition="'@(_DebugProjectReference)' != ''" Text="Release build resolved Debug project output: @(_DebugProjectReference)." />
+  </Target>
+</Project>
+

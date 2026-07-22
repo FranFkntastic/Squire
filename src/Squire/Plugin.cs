@@ -176,7 +176,11 @@ public sealed class Plugin : IDalamudPlugin
         OpenWindow();
     }
 
-    private void OnFrameworkUpdate(IFramework _) => agentBridge.Tick();
+    private void OnFrameworkUpdate(IFramework _)
+    {
+        agentBridge.Tick();
+        featurePanel.OnFrameworkUpdate();
+    }
 
     private void SaveConfiguration() => pluginInterface.SavePluginConfig(configuration);
 

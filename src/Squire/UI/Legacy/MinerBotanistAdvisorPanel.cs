@@ -303,11 +303,16 @@ internal sealed class MinerBotanistAdvisorPanel
         ImGui.SameLine();
         if (!state.IsBusy)
         {
-            if (ImGui.Button("Refresh##SquireAdvisor"))
+            var evaluationLabel = state.Advice is null
+                ? "Evaluate gear upgrades##SquireAdvisor"
+                : "Refresh evaluation##SquireAdvisor";
+            if (ImGui.Button(evaluationLabel))
                 Begin();
             RegisterLastControl(
                 "squire.outfitter.advisor.refresh",
-                "Capture current player equipment and refresh exact-quality evidence",
+                state.Advice is null
+                    ? "Evaluate gear upgrades from current player equipment and exact-quality evidence"
+                    : "Refresh the current gear-upgrade evaluation",
                 AgentBridgeUiControlKind.Button,
                 true,
                 false,
@@ -1335,7 +1340,7 @@ internal sealed class MinerBotanistAdvisorPanel
     private static void DrawEmptyState(MinerBotanistAdvisorSessionState state)
     {
         if (state.Stage == MinerBotanistAdvisorSessionStage.Idle)
-            ImGui.TextWrapped("Refresh captures current player state and equipped inventory on the next framework tick. It does not open Character UI, activate the game window, change jobs, purchase, or equip.");
+            ImGui.TextWrapped("Evaluate gear upgrades captures current player state and equipped inventory, then builds a reviewed upgrade frontier. It does not open Character UI, activate the game window, change jobs, purchase, or equip.");
         else if (state.Stage is MinerBotanistAdvisorSessionStage.Abstained or MinerBotanistAdvisorSessionStage.Failed)
             ImGui.TextWrapped("No recommendation was produced. The incomplete evidence remains visible above instead of being replaced by a guess.");
     }

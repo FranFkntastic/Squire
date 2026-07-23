@@ -94,8 +94,6 @@ internal sealed class MinerBotanistAdvisorPanel
             ? syntheticReviewAdvice
             : syntheticReviewActive ? null : displayedAdvice;
 #endif
-        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Outfitter — cost / utility advisor");
-        ImGui.TextWrapped(MinerBotanistReadOnlyAdvisor.AdvisoryRule);
         DrawControls(state);
 #if DEBUG
         if (syntheticReviewActive)
@@ -123,20 +121,25 @@ internal sealed class MinerBotanistAdvisorPanel
         else
 #endif
         {
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, state.CoverageLabel);
             if (state.AdviceIsRetained)
                 ImGui.TextColored(MarketMafiosoUiTheme.Warning,
                     RetainedAdviceLabel(state.Stage));
             if (state.IsBusy)
             {
+                ImGui.TextColored(MarketMafiosoUiTheme.Muted, FriendlyProgressMessage(state.Stage));
                 var fraction = state.Total is > 0 ? Math.Clamp((float)state.Completed / state.Total.Value, 0f, 1f) : 0f;
                 ImGui.ProgressBar(fraction, new Vector2(-1, 0), state.Total is > 0
                     ? $"{state.Completed:N0} / {state.Total:N0}"
-                    : state.Stage.ToString());
+                    : string.Empty);
             }
-            ImGui.PushStyleColor(ImGuiCol.Text, StatusColor(state.Stage));
-            ImGui.TextWrapped(state.Message);
-            ImGui.PopStyleColor();
+            else if (state.Stage is MinerBotanistAdvisorSessionStage.Abstained or
+                     MinerBotanistAdvisorSessionStage.Failed or
+                     MinerBotanistAdvisorSessionStage.Cancelled)
+            {
+                ImGui.PushStyleColor(ImGuiCol.Text, StatusColor(state.Stage));
+                ImGui.TextWrapped(state.Message);
+                ImGui.PopStyleColor();
+            }
         }
         ImGui.Separator();
 
@@ -209,12 +212,10 @@ internal sealed class MinerBotanistAdvisorPanel
             ? "Keep current equipped loadout"
             : $"{AcquisitionVerb(primary.Offer.SourceKind)} {primary.Offer.Definition.Name}";
 
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "SELECTED DECISION");
-        if (advice.Nomination?.Candidate.SolutionId == selected.Candidate.SolutionId)
-        {
-            ImGui.SameLine();
-            ImGui.TextColored(MarketMafiosoUiTheme.Success, "ADVISOR PICK");
-        }
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted,
+            advice.Nomination?.Candidate.SolutionId == selected.Candidate.SolutionId
+                ? "RECOMMENDED UPGRADE"
+                : "ALTERNATIVE OPTION");
         ImGui.TextColored(MarketMafiosoUiTheme.Header, title);
         ImGui.SameLine();
         ImGui.TextDisabled($"{changedSlotCount:N0} changed slot{(changedSlotCount == 1 ? string.Empty : "s")}");
@@ -229,12 +230,11 @@ internal sealed class MinerBotanistAdvisorPanel
 
     private void DrawFrontierExplorer(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
     {
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "EXACT FRONTIER");
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "COMPARE OPTIONS");
         ImGui.SameLine();
-        DrawFrontierViewButton("Solutions", AdvisorFrontierView.Solutions);
+        DrawFrontierViewButton("List", AdvisorFrontierView.Solutions);
         ImGui.SameLine();
-        DrawFrontierViewButton("Plot", AdvisorFrontierView.Plot);
-        ImGui.TextDisabled("One selection model; switch representation without duplicating it.");
+        DrawFrontierViewButton("Chart", AdvisorFrontierView.Plot);
 
         if (frontierView == AdvisorFrontierView.Plot)
             DrawFrontier(advice, selected);
@@ -301,7 +301,20 @@ internal sealed class MinerBotanistAdvisorPanel
             }
         }
         ImGui.SameLine();
-        if (!state.IsBusy)
+        if (state.IsBusy)
+        {
+            if (ImGui.Button("Cancel##SquireAdvisor"))
+                session.Cancel();
+            RegisterLastControl(
+                "squire.outfitter.advisor.cancel",
+                "Cancel the current advisor observation or market refresh",
+                AgentBridgeUiControlKind.Button,
+                true,
+                false,
+                null,
+                session.Cancel);
+        }
+        else if (state.Stage != MinerBotanistAdvisorSessionStage.Idle)
         {
             var evaluationLabel = state.Advice is null
                 ? "Evaluate gear upgrades##SquireAdvisor"
@@ -319,21 +332,8 @@ internal sealed class MinerBotanistAdvisorPanel
                 null,
                 Begin);
         }
-        else
-        {
-            if (ImGui.Button("Cancel##SquireAdvisor"))
-                session.Cancel();
-            RegisterLastControl(
-                "squire.outfitter.advisor.cancel",
-                "Cancel the current advisor observation or market refresh",
-                AgentBridgeUiControlKind.Button,
-                true,
-                false,
-                null,
-                session.Cancel);
-        }
 #if DEBUG
-        if (!state.IsBusy)
+        if (!state.IsBusy && config.EnableMarketAcquisitionDryRunTools)
         {
             ImGui.SameLine();
             var label = syntheticReviewAdvice is null
@@ -616,13 +616,13 @@ internal sealed class MinerBotanistAdvisorPanel
         var columnCount = selected.AcquisitionCostEstimate is null ? 4 : 5;
         if (!ImGui.BeginTable("##SquireAdvisorSummary", columnCount, ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp))
             return;
-        SummaryCell("Profile", $"{selected.Utility.Profile.ProfileVersion} · {ProfileContextLabel(selected.Utility)}", MarketMafiosoUiTheme.Header);
-        SummaryCell("Advisor", advice.Nomination is null ? "Abstained" : FormatCost(advice.Nomination.AcquisitionCostGil),
+        SummaryCell("Goal", ProfileContextLabel(selected.Utility), MarketMafiosoUiTheme.Header);
+        SummaryCell("Recommended", advice.Nomination is null ? "No recommendation" : FormatCost(advice.Nomination.AcquisitionCostGil),
             advice.Nomination is null ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Success);
         SummaryCell(selected.AcquisitionCostEstimate is null ? "Selected" : "Selected expected", FormatCost(selected.AcquisitionCostGil), MarketMafiosoUiTheme.Link);
         if (selected.AcquisitionCostEstimate is { } estimate)
             SummaryCell($"Selected {estimate.PlanningConfidence:P0} plan", FormatCost(estimate.PlanningCostGil), MarketMafiosoUiTheme.Warning);
-        SummaryCell("Utility", selected.Utility.UtilityScore.ToString("N1"), MarketMafiosoUiTheme.Header);
+        SummaryCell("Improvement", FormatUtilityGain(advice, selected), MarketMafiosoUiTheme.Success);
         ImGui.EndTable();
     }
 
@@ -680,7 +680,7 @@ internal sealed class MinerBotanistAdvisorPanel
 #endif
         var model = frontierPlot!;
         ImGui.TextColored(MarketMafiosoUiTheme.Muted,
-            $"Exact frontier window {frontierWindow!.Offset + 1:N0}-{frontierWindow.EndOffset:N0} of {frontierWindow.TotalCount:N0}");
+            $"Options {frontierWindow!.Offset + 1:N0}–{frontierWindow.EndOffset:N0} of {frontierWindow.TotalCount:N0}");
         var interaction = new PlotInteractionState(
             new HashSet<string>(StringComparer.Ordinal) { selected.Candidate.SolutionId },
             advice.Nomination?.Candidate.SolutionId,
@@ -1085,7 +1085,7 @@ internal sealed class MinerBotanistAdvisorPanel
                         recipe.RecipeId,
                         checked((int)recipe.CraftCount))));
                 ImGui.SetClipboardText(export.Json);
-                handoffStatus = $"Copied reviewed Artisan list: {export.RecipeCount:N0} recipe(s), {export.ExpandedEntryCount:N0} craft(s). MarketMafioso did not start crafting.";
+                handoffStatus = $"Copied Artisan list: {export.RecipeCount:N0} recipe(s), {export.ExpandedEntryCount:N0} craft(s). Squire did not start crafting.";
             }
             catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or OverflowException)
             {
@@ -1144,7 +1144,7 @@ internal sealed class MinerBotanistAdvisorPanel
                 return;
             if (!string.Equals(selectedSolutionId, selected.Candidate.SolutionId, StringComparison.Ordinal))
             {
-                handoffStatus = "Workbench handoff stopped safely: the selected solution changed after review.";
+                handoffStatus = "Upgrade handoff stopped safely because the selected option changed.";
                 return;
             }
             try
@@ -1198,17 +1198,17 @@ internal sealed class MinerBotanistAdvisorPanel
                 }
 #endif
                 if (!session.RequestWorkbenchValidation(advice, selected.Candidate.SolutionId, evidence))
-                    throw new InvalidOperationException("The player baseline is no longer current; refresh the Advisor before Workbench review.");
-                handoffStatus = "Revalidating the current player baseline before Workbench review.";
+                    throw new InvalidOperationException("Your equipped gear changed; refresh the evaluation before continuing.");
+                handoffStatus = "Checking that your equipped gear has not changed…";
             }
             catch (Exception exception)
             {
-                handoffStatus = $"Workbench handoff stopped safely: {exception.Message}";
+                handoffStatus = $"Upgrade handoff stopped safely: {exception.Message}";
             }
         }
         var workbenchLabel = containsCraft
-            ? $"Review {craftHandoff?.MarketMaterials.Count ?? 0:N0} materials"
-            : "Review in Workbench";
+            ? $"Get {craftHandoff?.MarketMaterials.Count ?? 0:N0} materials"
+            : "Get these upgrades";
         if (containsCraft)
             ImGui.SameLine();
         if (ImGuiUi.PrimaryButton(workbenchLabel, canStage))
@@ -1218,8 +1218,8 @@ internal sealed class MinerBotanistAdvisorPanel
                 ? "squire.outfitter.advisor.stage-materials-workbench"
                 : "squire.outfitter.advisor.stage-workbench",
             containsCraft
-                ? "Add only the selected craft plans' exact terminal market materials to the Market Acquisition Workbench"
-                : "Add the selected exact-quality solution to the Market Acquisition Workbench",
+                ? "Prepare the market materials needed for the selected crafted upgrades"
+                : "Prepare the selected upgrades for acquisition",
             AgentBridgeUiControlKind.Button,
             canStage,
             false,
@@ -1258,7 +1258,7 @@ internal sealed class MinerBotanistAdvisorPanel
             return;
         }
 
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "ARTISAN LIST - SUBCRAFTS FIRST");
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "ARTISAN CRAFTING LIST");
         if (ImGui.BeginTable("##SquireAdvisorCraftRecipes", 2,
                 ImGuiTableFlags.RowBg | ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp))
         {
@@ -1273,7 +1273,7 @@ internal sealed class MinerBotanistAdvisorPanel
             ImGui.EndTable();
         }
 
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "TERMINAL MATERIALS");
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "MATERIALS TO BUY");
         if (ImGui.BeginTable("##SquireAdvisorCraftMaterials", 6,
                 ImGuiTableFlags.RowBg | ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp))
         {
@@ -1320,7 +1320,7 @@ internal sealed class MinerBotanistAdvisorPanel
         try
         {
             var evidence = session.CurrentEvidence
-                ?? throw new InvalidOperationException("The published market evidence expired before Workbench review.");
+                ?? throw new InvalidOperationException("Market prices expired before the upgrade list was prepared.");
             var transfer = OutfitterWorkbenchTransferBuilder.Build(
                 validation.Advice,
                 validation.SelectedSolutionId,
@@ -1328,22 +1328,45 @@ internal sealed class MinerBotanistAdvisorPanel
                 validation);
             stageTransfer(transfer);
             handoffStatus = transfer.SelectedLoadout.Any(line => line.OfferKey.SourceKind == EquipmentAcquisitionSourceKind.Craft)
-                ? "Exact terminal market materials added to the Market Acquisition Workbench after current player baseline revalidation; gear and crafting remain manual."
-                : "Exact-quality solution added to the Market Acquisition Workbench after current player baseline revalidation.";
+                ? "Materials are ready for review. Gear selection and crafting remain under your control."
+                : "Upgrades are ready for review.";
         }
         catch (Exception exception)
         {
-            handoffStatus = $"Workbench handoff stopped safely: {exception.Message}";
+            handoffStatus = $"Upgrade handoff stopped safely: {exception.Message}";
         }
     }
 
-    private static void DrawEmptyState(MinerBotanistAdvisorSessionState state)
+    private void DrawEmptyState(MinerBotanistAdvisorSessionState state)
     {
         if (state.Stage == MinerBotanistAdvisorSessionStage.Idle)
-            ImGui.TextWrapped("Evaluate gear upgrades captures current player state and equipped inventory, then builds a reviewed upgrade frontier. It does not open Character UI, activate the game window, change jobs, purchase, or equip.");
+        {
+            ImGui.Dummy(new Vector2(0, 34f));
+            ImGui.TextColored(MarketMafiosoUiTheme.Header, "Find your next gear upgrades");
+            ImGui.TextWrapped("Squire compares your equipped MIN and BTN gear with items you own, vendor stock, crafting options, and current market listings.");
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Nothing is purchased or equipped unless you explicitly continue with an upgrade list.");
+            ImGui.Spacing();
+            if (ImGuiUi.PrimaryButton("Evaluate my gear", true))
+                Begin();
+            RegisterLastControl(
+                "squire.outfitter.advisor.refresh",
+                "Evaluate gear upgrades from the active player's equipment",
+                AgentBridgeUiControlKind.Button,
+                true,
+                false,
+                null,
+                Begin);
+        }
         else if (state.Stage is MinerBotanistAdvisorSessionStage.Abstained or MinerBotanistAdvisorSessionStage.Failed)
             ImGui.TextWrapped("No recommendation was produced. The incomplete evidence remains visible above instead of being replaced by a guess.");
     }
+
+    private static string FriendlyProgressMessage(MinerBotanistAdvisorSessionStage stage) => stage switch
+    {
+        MinerBotanistAdvisorSessionStage.CapturingPlayer => "Reading your current MIN and BTN equipment…",
+        MinerBotanistAdvisorSessionStage.DiscoveringMarket => "Comparing owned, vendor, crafted, and market options…",
+        _ => "Evaluating gear upgrades…",
+    };
 
     /// <summary>Label for the context the solution was actually evaluated under — never the UI selector.</summary>
     private static string ProfileContextLabel(EquipmentUtilityEvaluation evaluation) =>

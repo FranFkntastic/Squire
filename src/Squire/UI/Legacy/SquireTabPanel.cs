@@ -55,15 +55,13 @@ internal sealed class SquireTabPanel : IDisposable
     private readonly DalamudFilterAutocompleteState filterEditor = new();
     private readonly SquireCandidateFilter candidateFilter = new();
     private bool filterReferenceRequested;
+    private bool filtersRequested;
     private System.Numerics.Vector2 filterReferenceAnchor;
     private bool showProtected;
     private bool showNonEquipment;
-    private bool selectionMode;
+    private bool showColumnFilters;
     private readonly HashSet<EquipmentInstanceFingerprint> tableSelection = new(EquipmentInstanceFingerprintComparer.Instance);
-    private EquipmentInstanceFingerprint? selectionAnchor;
     private readonly string[] columnFilters = new string[SquireCandidateTableProjection.ColumnCount];
-    private int selectionDragStart = -1;
-    private bool selectionDragValue;
     private EquipmentInstanceFingerprint? focusedItem;
     private bool showBatchOnly;
     private int hiddenBatchCount;
@@ -184,25 +182,19 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void DrawWorkspaceSelector()
     {
-        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Squire");
+        DrawWorkspaceButton("Outfitter", "Gear upgrades", "Find and acquire complete gear upgrades");
         ImGui.SameLine();
-        DrawWorkspaceButton("Outfitter", "Plan complete job and retainer loadouts");
-        ImGui.SameLine();
-        DrawWorkspaceButton("Cleanup", "Review and execute equipment cleanup");
-        ImGui.SameLine();
-        ImGui.TextColored(
-            MarketMafiosoUiTheme.Muted,
-            selectedWorkspace == "Outfitter" ? "Target → loadout → acquisition" : "Review → confirm → execute");
+        DrawWorkspaceButton("Cleanup", "Cleanup", "Review and execute equipment cleanup");
     }
 
-    private void DrawWorkspaceButton(string workspace, string label)
+    private void DrawWorkspaceButton(string workspace, string visibleLabel, string reviewLabel)
     {
         var selected = selectedWorkspace == workspace;
-        if (ImGui.Selectable($"{workspace}##SquireWorkspace{workspace}", selected, ImGuiSelectableFlags.None, new(92f, 0)))
+        if (ImGui.Selectable($"{visibleLabel}##SquireWorkspace{workspace}", selected, ImGuiSelectableFlags.None, new(112f, 0)))
             SelectWorkspace(workspace);
         RegisterLastControl(
             $"squire.workspace.{workspace.ToLowerInvariant()}",
-            label,
+            reviewLabel,
             AgentBridgeUiControlKind.Select,
             true,
             selected,
@@ -224,23 +216,25 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void DrawCleanup()
     {
-        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Squire — cleanup selection");
-        ImGui.TextWrapped("Squire keeps its equipment analysis current automatically. Cleanup happens only through an explicitly selected and confirmed batch.");
-        if (ImGui.Button("Refresh##Squire"))
-            Refresh();
-        RegisterLastControl("squire.refresh", "Refresh Squire analysis", AgentBridgeUiControlKind.Button, true, false, null, Refresh);
-        ImGui.SameLine();
-        if (analysis is not null && ImGui.Button("Export evaluation snapshot##Squire"))
-            Export();
-        RegisterLastControl("squire.export", "Export Squire evaluation snapshot", AgentBridgeUiControlKind.Button, analysis is not null, false, null, Export);
-        ImGui.SameLine();
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, status);
-        ImGui.Separator();
-
         if (analysis is null)
+        {
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, status);
             return;
-        DrawSummary(analysis);
-        DrawDiagnostics(analysis);
+        }
+
+        var executable = analysis.Candidates.Count(candidate => candidate.IsExecutable);
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, $"{executable:N0} items ready to review");
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Protected gear stays hidden unless you ask to see it. Select rows directly to build a cleanup batch.");
+        if (!analysis.Snapshot.Diagnostics.IsComplete)
+            DrawDiagnostics(analysis);
+        if (ImGui.CollapsingHeader("Analysis details##SquireAnalysisDetails"))
+        {
+            DrawSummary(analysis);
+#if DEBUG
+            if (config.EnableMarketAcquisitionDryRunTools && ImGui.Button("Export evaluation snapshot##Squire"))
+                Export();
+#endif
+        }
         ImGui.Separator();
         if (DalamudFilterAutocompleteRenderer.Draw(
                 "SquireCandidates",
@@ -254,7 +248,24 @@ internal sealed class SquireTabPanel : IDisposable
             config.Save();
         }
         ImGui.SameLine();
-        if (ImGui.SmallButton("?##SquireFilterReference"))
+        if (ImGui.Button("Filters##SquireFilters"))
+            filtersRequested = true;
+        RegisterLastControl(
+            "squire.filters",
+            "Open cleanup filters",
+            AgentBridgeUiControlKind.Button,
+            true,
+            false,
+            null,
+            () => filtersRequested = true);
+        if (filtersRequested)
+        {
+            ImGui.OpenPopup("##SquireFiltersPopup");
+            filtersRequested = false;
+        }
+        DrawFiltersPopup();
+        ImGui.SameLine();
+        if (ImGui.Button("Filter help##SquireFilterReference"))
             filterReferenceRequested = true;
         filterReferenceAnchor = new System.Numerics.Vector2(ImGui.GetItemRectMax().X, ImGui.GetItemRectMax().Y + 4);
         RegisterLastControl(
@@ -266,11 +277,14 @@ internal sealed class SquireTabPanel : IDisposable
             null,
             () => filterReferenceRequested = true);
 #if DEBUG
-        RegisterFilterReviewControl("complete-hq", "Open HQ filter completion", "is:h");
-        RegisterFilterReviewControl("apply-hq", "Apply HQ candidate filter", "is:hq");
-        RegisterFilterReviewControl("apply-armoury", "Apply Armoury candidate filter", "location:armoury");
-        RegisterFilterReviewControl("invalid", "Apply invalid candidate filter", "quality:banana");
-        RegisterFilterReviewControl("clear", "Clear candidate filter", string.Empty);
+        if (config.EnableMarketAcquisitionDryRunTools)
+        {
+            RegisterFilterReviewControl("complete-hq", "Open HQ filter completion", "is:h");
+            RegisterFilterReviewControl("apply-hq", "Apply HQ candidate filter", "is:hq");
+            RegisterFilterReviewControl("apply-armoury", "Apply Armoury candidate filter", "location:armoury");
+            RegisterFilterReviewControl("invalid", "Apply invalid candidate filter", "quality:banana");
+            RegisterFilterReviewControl("clear", "Clear candidate filter", string.Empty);
+        }
 #endif
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Filter reference");
@@ -280,8 +294,29 @@ internal sealed class SquireTabPanel : IDisposable
             filterReferenceRequested = false;
         }
         DrawFilterReference();
-        ImGui.SameLine();
-        if (ImGui.Checkbox("Show protected", ref showProtected))
+        if (!filterEditor.IsEditingWithSuggestions && !string.IsNullOrWhiteSpace(candidateFilter.Error))
+            ImGui.TextColored(MarketMafiosoUiTheme.Error, candidateFilter.Error);
+        DrawTable(analysis);
+        evidencePanel.Draw(analysis, focusedItem);
+        DrawRunPanel(analysis);
+        if (lastRun is { } runPresentation)
+            runResultPanel.Draw(
+                runPresentation,
+                resolveItemName,
+                RecoverLastRunInteraction,
+                activeRunRecovery is { IsCompleted: false },
+                RetryLastRunFromCheckpoint,
+                activeRun is { IsCompleted: false },
+                () => lastRun = null,
+                OpenLastRunAuditLocation);
+    }
+
+    private void DrawFiltersPopup()
+    {
+        if (!ImGui.BeginPopup("##SquireFiltersPopup"))
+            return;
+
+        if (ImGui.Checkbox("Show protected gear", ref showProtected))
         {
             config.Squire.ShowProtected = showProtected;
             config.Save();
@@ -299,49 +334,15 @@ internal sealed class SquireTabPanel : IDisposable
                 config.Squire.ShowProtected = showProtected;
                 config.Save();
             });
-        ImGui.SameLine();
         if (ImGui.Checkbox("Show non-equipment", ref showNonEquipment))
         {
             config.Squire.ShowNonEquipment = showNonEquipment;
             config.Save();
         }
-        ImGui.SameLine();
-        ImGui.Checkbox("Selection mode", ref selectionMode);
-        RegisterLastControl(
-            "squire.selection-mode",
-            "Toggle Squire selection mode",
-            AgentBridgeUiControlKind.Toggle,
-            true,
-            selectionMode,
-            null,
-            () => selectionMode = !selectionMode);
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Select any rows for inspection. Ctrl-click toggles rows; Shift-click selects the range from the anchor. Only executable candidates enter the action batch.");
-        if (selectionMode && tableSelection.Count > 0)
-        {
-            ImGui.SameLine();
-            if (ImGui.SmallButton("Clear selection"))
-            {
-                ClearSelectionOnly();
-                selectionAnchor = null;
-            }
-        }
-        if (!filterEditor.IsEditingWithSuggestions && !string.IsNullOrWhiteSpace(candidateFilter.Error))
-            ImGui.TextColored(MarketMafiosoUiTheme.Error, candidateFilter.Error);
-        DrawBatchBar();
-        DrawTable(analysis);
-        evidencePanel.Draw(analysis, focusedItem);
-        DrawRunPanel(analysis);
-        if (lastRun is { } runPresentation)
-            runResultPanel.Draw(
-                runPresentation,
-                resolveItemName,
-                RecoverLastRunInteraction,
-                activeRunRecovery is { IsCompleted: false },
-                RetryLastRunFromCheckpoint,
-                activeRun is { IsCompleted: false },
-                () => lastRun = null,
-                OpenLastRunAuditLocation);
+        if (ImGui.Checkbox("Show column filters", ref showColumnFilters) && !showColumnFilters)
+            Array.Fill(columnFilters, string.Empty);
+
+        ImGui.EndPopup();
     }
 
     private void Refresh() => Refresh(reconcileSelections: analysis is not null, "Manual refresh");
@@ -428,18 +429,14 @@ internal sealed class SquireTabPanel : IDisposable
                 var currentFingerprints = analysis.Candidates.Select(candidate => candidate.Instance.Fingerprint)
                     .ToHashSet(EquipmentInstanceFingerprintComparer.Instance);
                 tableSelection.RemoveWhere(fingerprint => !currentFingerprints.Contains(fingerprint));
-                if (selectionAnchor is { } anchor && !currentFingerprints.Contains(anchor))
-                    selectionAnchor = null;
                 if (focusedItem is { } focused && !currentFingerprints.Contains(focused))
                     focusedItem = null;
             }
             else
             {
                 tableSelection.Clear();
-                selectionAnchor = null;
                 focusedItem = null;
             }
-            selectionDragStart = -1;
             InvalidateRunAuthorization();
             hiddenBatchCount = 0;
             automaticRefreshRequested = false;
@@ -500,30 +497,33 @@ internal sealed class SquireTabPanel : IDisposable
                          ImGuiTableFlags.ScrollX | ImGuiTableFlags.Resizable | ImGuiTableFlags.Reorderable |
                          ImGuiTableFlags.Hideable | ImGuiTableFlags.Sortable;
         var tableHeight = Math.Max(260f, ImGui.GetContentRegionAvail().Y * 0.62f);
-        if (!ImGui.BeginTable("##SquireCandidatesV3", SquireCandidateTableProjection.ColumnCount, tableFlags, new System.Numerics.Vector2(0, tableHeight)))
+        if (!ImGui.BeginTable("##SquireCandidatesV4", SquireCandidateTableProjection.ColumnCount, tableFlags, new System.Numerics.Vector2(0, tableHeight)))
             return;
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultSort | ImGuiTableColumnFlags.NoHide, 180);
         ImGui.TableSetupColumn("Location", ImGuiTableColumnFlags.WidthFixed, 135);
-        ImGui.TableSetupColumn("Equip Lv", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.PreferSortDescending, 65);
+        ImGui.TableSetupColumn("Equip Lv", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.PreferSortDescending | ImGuiTableColumnFlags.DefaultHide, 65);
         ImGui.TableSetupColumn("Item Lv", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.PreferSortDescending, 60);
         ImGui.TableSetupColumn("Rarity", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 105);
         ImGui.TableSetupColumn("Quality", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 65);
         ImGui.TableSetupColumn("Copies", ImGuiTableColumnFlags.WidthFixed, 125);
         ImGui.TableSetupColumn("Materia", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 65);
         ImGui.TableSetupColumn("Condition", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 75);
-        ImGui.TableSetupColumn("Inferred wearer", ImGuiTableColumnFlags.WidthFixed, 110);
-        ImGui.TableSetupColumn("Assessment", ImGuiTableColumnFlags.WidthFixed, 90);
+        ImGui.TableSetupColumn("Inferred wearer", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 110);
+        ImGui.TableSetupColumn("Assessment", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 90);
         ImGui.TableSetupColumn("Disposition", ImGuiTableColumnFlags.WidthFixed, 90);
         ImGui.TableSetupColumn("Row state", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 105);
         ImGui.TableSetupColumn("Reason", ImGuiTableColumnFlags.WidthFixed, 320);
         ImGui.TableSetupColumn("Item ID", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 75);
         ImGui.TableSetupScrollFreeze(1, 2);
         ImGui.TableHeadersRow();
-        if (showBatchOnly)
-            ImGui.BeginDisabled();
-        DrawColumnFilters();
-        if (showBatchOnly)
-            ImGui.EndDisabled();
+        if (showColumnFilters)
+        {
+            if (showBatchOnly)
+                ImGui.BeginDisabled();
+            DrawColumnFilters();
+            if (showBatchOnly)
+                ImGui.EndDisabled();
+        }
         var filteredRows = showBatchOnly
             ? baseRows
             : SquireCandidateTableProjection.Filter(baseRows, columnFilters, FormatRowState);
@@ -546,7 +546,7 @@ internal sealed class SquireTabPanel : IDisposable
                 selected,
                 ImGuiSelectableFlags.SpanAllColumns | ImGuiSelectableFlags.AllowItemOverlap,
                 new System.Numerics.Vector2(0, itemHeight));
-            HandleRowInteraction(value, rows, rowIndex, candidate);
+            HandleRowInteraction(candidate);
             RegisterLastControl(
                 $"squire.focus.{fingerprint.Container}.{fingerprint.SlotIndex}",
                 $"Inspect {candidate.Definition.Name}",
@@ -571,22 +571,19 @@ internal sealed class SquireTabPanel : IDisposable
                         SetSelection(value, candidate, !tableSelection.Contains(fingerprint));
                     });
             }
-            else
-            {
-                RegisterLastControl(
-                    $"squire.inspect.{fingerprint.Container}.{fingerprint.SlotIndex}",
-                    $"Toggle inspection-only selection for {candidate.Definition.Name}",
-                    AgentBridgeUiControlKind.Toggle,
-                    true,
-                    selected,
-                    FormatAssessment(candidate.Assessment),
-                    () =>
-                    {
-                        focusedItem = fingerprint;
-                        SetSelection(value, candidate, !tableSelection.Contains(fingerprint));
-                    });
-            }
             ImGui.SetCursorPos(itemCursor);
+            if (candidate.IsExecutable)
+            {
+                var included = selected;
+                if (ImGui.Checkbox($"##SquireSelectCheckbox{fingerprint.Container}{fingerprint.SlotIndex}", ref included))
+                {
+                    focusedItem = fingerprint;
+                    SetSelection(value, candidate, included);
+                }
+            }
+            else
+                ImGui.Dummy(new System.Numerics.Vector2(ImGui.GetFrameHeight(), ImGui.GetFrameHeight()));
+            ImGui.SameLine();
             ImGui.PushTextWrapPos(itemCursor.X + itemWidth);
             SquireEvidencePanel.DrawItemLink(value, candidate);
             ImGui.PopTextWrapPos();
@@ -615,8 +612,6 @@ internal sealed class SquireTabPanel : IDisposable
             }
             Cell(candidate.Definition.ItemId.ToString());
         }
-        if (selectionDragStart >= 0 && ImGui.IsMouseReleased(ImGuiMouseButton.Left))
-            selectionDragStart = -1;
         ImGui.EndTable();
     }
 
@@ -672,35 +667,6 @@ internal sealed class SquireTabPanel : IDisposable
             });
 #endif
 
-    private void DrawBatchBar()
-    {
-        var selections = review.Selections;
-        var expertDelivery = selections.Count(pair => pair.Value == SquireDisposition.ExpertDelivery);
-        var desynthesis = selections.Count(pair => pair.Value == SquireDisposition.Desynthesize);
-        var vendor = selections.Count(pair => pair.Value == SquireDisposition.VendorSell);
-        var discard = selections.Count(pair => pair.Value == SquireDisposition.Discard);
-        ImGui.Separator();
-        ImGui.TextColored(MarketMafiosoUiTheme.Header,
-            $"Cleanup batch: {selections.Count} | Expert Delivery {expertDelivery} | Desynthesize {desynthesis} | Vendor {vendor} | Discard {discard}");
-        if (hiddenBatchCount > 0 && !showBatchOnly)
-        {
-            ImGui.SameLine();
-            ImGui.TextColored(MarketMafiosoUiTheme.Warning, $"{hiddenBatchCount} hidden by filters");
-        }
-        ImGui.SameLine();
-        ImGui.Checkbox("Show batch only", ref showBatchOnly);
-        RegisterLastControl(
-            "squire.show-batch-only",
-            "Show cleanup-batch rows only",
-            AgentBridgeUiControlKind.Toggle,
-            true,
-            showBatchOnly,
-            hiddenBatchCount > 0 ? $"{hiddenBatchCount} hidden" : null,
-            () => showBatchOnly = !showBatchOnly);
-        if (!string.IsNullOrWhiteSpace(reconciliationNotice))
-            ImGui.TextWrapped(reconciliationNotice);
-    }
-
     private string FormatRowState(SquireCandidate candidate)
     {
         var fingerprint = candidate.Instance.Fingerprint;
@@ -711,49 +677,10 @@ internal sealed class SquireTabPanel : IDisposable
         return focusedItem is { } focused && EquipmentInstanceFingerprintComparer.Instance.Equals(focused, fingerprint) ? "Focused" : "—";
     }
 
-    private void HandleRowInteraction(SquireAnalysis analysis, SquireCandidate[] rows, int rowIndex, SquireCandidate candidate)
+    private void HandleRowInteraction(SquireCandidate candidate)
     {
         if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
-        {
             focusedItem = candidate.Instance.Fingerprint;
-            if (selectionMode)
-            {
-                var io = ImGui.GetIO();
-                if (io.KeyShift && selectionAnchor is { } anchor)
-                {
-                    var anchorIndex = Array.FindIndex(rows, row =>
-                        EquipmentInstanceFingerprintComparer.Instance.Equals(row.Instance.Fingerprint, anchor));
-                    if (anchorIndex >= 0)
-                    {
-                        if (!io.KeyCtrl)
-                            ClearSelectionOnly();
-                        var rangeFirst = Math.Min(anchorIndex, rowIndex);
-                        var rangeLast = Math.Max(anchorIndex, rowIndex);
-                        for (var index = rangeFirst; index <= rangeLast; index++)
-                            SetSelection(analysis, rows[index], true);
-                    }
-                }
-                else if (io.KeyCtrl)
-                {
-                    SetSelection(analysis, candidate, !tableSelection.Contains(candidate.Instance.Fingerprint));
-                    selectionAnchor = candidate.Instance.Fingerprint;
-                }
-                else
-                {
-                    ClearSelectionOnly();
-                    SetSelection(analysis, candidate, true);
-                    selectionAnchor = candidate.Instance.Fingerprint;
-                }
-                selectionDragStart = rowIndex;
-                selectionDragValue = true;
-            }
-        }
-        if (!selectionMode || selectionDragStart < 0 || !ImGui.IsItemHovered() || !ImGui.IsMouseDragging(ImGuiMouseButton.Left))
-            return;
-        var first = Math.Min(selectionDragStart, rowIndex);
-        var last = Math.Max(selectionDragStart, rowIndex);
-        for (var index = first; index <= last; index++)
-            SetSelection(analysis, rows[index], selectionDragValue);
     }
 
     private void SetSelection(SquireAnalysis analysis, SquireCandidate candidate, bool selected)
@@ -840,10 +767,35 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void DrawRunPanel(SquireAnalysis value)
     {
-        ImGui.Separator();
         var selections = review.Selections;
-        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Cleanup batch authorization");
-        ImGui.TextUnformatted($"Selected: {selections.Count} | Expert Delivery: {selections.Count(pair => pair.Value == SquireDisposition.ExpertDelivery)} | Desynthesize: {selections.Count(pair => pair.Value == SquireDisposition.Desynthesize)} | Vendor: {selections.Count(pair => pair.Value == SquireDisposition.VendorSell)} | Discard: {selections.Count(pair => pair.Value == SquireDisposition.Discard)}");
+        if (selections.Count == 0)
+        {
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Select items above to build a cleanup batch.");
+            return;
+        }
+
+        ImGui.Separator();
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Selected cleanup");
+        ImGui.TextUnformatted($"{selections.Count} selected · {selections.Count(pair => pair.Value == SquireDisposition.ExpertDelivery)} Expert Delivery · {selections.Count(pair => pair.Value == SquireDisposition.Desynthesize)} Desynthesize · {selections.Count(pair => pair.Value == SquireDisposition.VendorSell)} Vendor · {selections.Count(pair => pair.Value == SquireDisposition.Discard)} Discard");
+        if (ImGui.Checkbox("Show selected only", ref showBatchOnly))
+            InvalidateRunAuthorization();
+        RegisterLastControl(
+            "squire.show-batch-only",
+            "Show only selected cleanup items",
+            AgentBridgeUiControlKind.Toggle,
+            true,
+            showBatchOnly,
+            hiddenBatchCount > 0 ? $"{hiddenBatchCount} hidden" : null,
+            () => showBatchOnly = !showBatchOnly);
+        ImGui.SameLine();
+        if (ImGui.Button("Clear selection##SquireCleanupSelection"))
+        {
+            ClearSelectionOnly();
+            showBatchOnly = false;
+            return;
+        }
+        if (!string.IsNullOrWhiteSpace(reconciliationNotice))
+            ImGui.TextWrapped(reconciliationNotice);
         if (!value.Snapshot.Diagnostics.IsComplete)
             ImGui.TextColored(MarketMafiosoUiTheme.Error, "Execution blocked: snapshot is incomplete.");
         if (hiddenBatchCount > 0 && !showBatchOnly)
@@ -877,21 +829,26 @@ internal sealed class SquireTabPanel : IDisposable
             ImGui.EndDisabled();
 
         var runEnabled = canRun && runConfirmed && string.Equals(confirmedBatchKey, batchValidationKey, StringComparison.Ordinal);
-        if (!runEnabled)
-            ImGui.BeginDisabled();
-        if (ImGui.Button("Run cleanup with diagnostics##Squire"))
-            StartDiagnosticRun(value);
-        RegisterLastControl(
-            "squire.run.diagnostic",
-            "Run the explicitly confirmed cleanup batch with catchall UI-state recording enabled",
-            AgentBridgeUiControlKind.Button,
-            runEnabled,
-            false,
-            selections.Count.ToString(),
-            () => StartDiagnosticRun(value));
-        if (!runEnabled)
-            ImGui.EndDisabled();
-        ImGui.SameLine();
+#if DEBUG
+        if (config.EnableMarketAcquisitionDryRunTools)
+        {
+            if (!runEnabled)
+                ImGui.BeginDisabled();
+            if (ImGui.Button("Run cleanup with diagnostics##Squire"))
+                StartDiagnosticRun(value);
+            RegisterLastControl(
+                "squire.run.diagnostic",
+                "Run the explicitly confirmed cleanup batch with catchall UI-state recording enabled",
+                AgentBridgeUiControlKind.Button,
+                runEnabled,
+                false,
+                selections.Count.ToString(),
+                () => StartDiagnosticRun(value));
+            if (!runEnabled)
+                ImGui.EndDisabled();
+            ImGui.SameLine();
+        }
+#endif
         if (!runEnabled)
             ImGui.BeginDisabled();
         if (ImGui.Button("Run selected cleanup##Squire"))

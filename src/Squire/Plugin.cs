@@ -123,7 +123,7 @@ public sealed class Plugin : IDalamudPlugin
                   ?? "North America");
         marketMafiosoAcquisition = new MarketMafiosoAcquisitionIpcClient(pluginInterface);
         featurePanel.ConnectMarketAcquisition(marketMafiosoAcquisition.Stage);
-        window = new(configuration, SaveAndPublish, importer, featurePanel, reviewRegistry);
+        window = new(SaveAndPublish, importer, featurePanel, reviewRegistry);
         windows.AddWindow(window);
         ipc = new(new DalamudIpcRegistrar(pluginInterface), configuration.PluginInstanceId, CreateSnapshot, OpenWindow);
         agentBridge = new(

@@ -1032,8 +1032,8 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 
     private static MinerBotanistAdvisorSessionState Idle(AdvisorUtilityContextDescriptor context) => new(
         MinerBotanistAdvisorSessionStage.Idle,
-        "Refresh to capture the active player and build read-only advice without opening Character UI.",
-        "Coverage has not been observed yet.",
+        "Ready to evaluate the active player's gear.",
+        "No evaluation yet.",
         0,
         null,
         context,

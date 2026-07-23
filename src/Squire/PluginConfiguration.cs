@@ -36,7 +36,7 @@ public sealed class PluginConfiguration : IPluginConfiguration, ISquireConfigura
 [Serializable]
 public sealed class SquireSettings
 {
-    public string SelectedWorkspace { get; set; } = "Outfitter";
+    public string SelectedWorkspace { get; set; } = "Cleanup";
     public string OutfitterAdvisorContext { get; set; } = "OrdinaryResourceBenchmark";
     public int OutfitterAdvisorContextDefaultVersion { get; set; }
     public bool ShowProtected { get; set; }

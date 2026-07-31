@@ -10,6 +10,7 @@ using Squire.Persistence;
 using Squire.UI;
 using System.Text.Json;
 using Franthropy.Dalamud.AgentBridge;
+using Franthropy.Dalamud.Observations;
 using MarketMafioso.Automation.Travel;
 using MarketMafioso.Diagnostics;
 using MarketMafioso.MarketAcquisition;
@@ -47,8 +48,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly SquireIpcProvider ipc;
     private readonly MarketMafiosoAcquisitionIpcClient marketMafiosoAcquisition;
-    private readonly AgentBridgeHost agentBridge;
+    private readonly Squire.AgentBridge.AgentBridgeHost agentBridge;
     private readonly IFramework framework;
+    private readonly DalamudSharedObservationHost? sharedObservationHost;
 
     public Plugin(IDalamudPluginInterface pluginInterface, ICommandManager commands, IFramework framework)
     {
@@ -65,6 +67,29 @@ public sealed class Plugin : IDalamudPlugin
         SaveConfiguration();
 
         var configDirectory = pluginInterface.GetPluginConfigDirectory();
+        try
+        {
+            sharedObservationHost = new DalamudSharedObservationHost(new DalamudSharedObservationHostOptions
+            {
+                PluginConfigDirectory = configDirectory,
+                PluginName = "Squire",
+                PluginInstanceId = Guid.NewGuid().ToString("N"),
+                GameBuild = Franthropy.Dalamud.Diagnostics.GamePatchCompatibilityGate.ReadCurrentGameVersion(),
+                GameInventory = GameInventory,
+                PlayerState = PlayerState,
+                AddonLifecycle = AddonLifecycle,
+                Diagnostic = (message, exception) =>
+                {
+                    if (exception is null) Log.Warning(message);
+                    else Log.Error(exception, message);
+                },
+            });
+            sharedObservationHost.Start();
+        }
+        catch (Exception exception)
+        {
+            Log.Error(exception, "Squire shared-observation hosting is unavailable.");
+        }
         var pluginConfigRoot = Directory.GetParent(configDirectory)?.FullName
             ?? throw new InvalidOperationException("Plugin configuration root is unavailable.");
         var importer = new LegacyMmfImporter(
@@ -156,6 +181,7 @@ public sealed class Plugin : IDalamudPlugin
         featurePanel.Dispose();
         uiStateCapture.Dispose();
         marketHttpClient.Dispose();
+        sharedObservationHost?.Dispose();
         ECommonsMain.Dispose();
     }
 

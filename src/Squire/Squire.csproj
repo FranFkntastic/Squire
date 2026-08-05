@@ -43,6 +43,19 @@
     <Error Condition="!Exists('$(CraftArchitectCoreProject)')" Text="Craft Architect Core was not found at '$(CraftArchitectCoreProject)'. Clone it beside Squire or set CraftArchitectCoreProject." />
   </Target>
 
+  <Target Name="ValidateCraftArchitectPin" BeforeTargets="PrepareForBuild"
+          Condition="Exists('$(MSBuildProjectDirectory)\..\..\eng\craft-architect.ref') and '$(CraftArchitectAllowUnpinned)' != 'true'">
+    <PropertyGroup>
+      <CraftArchitectRepoRoot>$([System.IO.Path]::GetFullPath('$(CraftArchitectCoreProject)\..\..\..'))</CraftArchitectRepoRoot>
+      <CraftArchitectPinnedRevision>$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\..\..\eng\craft-architect.ref').Trim())</CraftArchitectPinnedRevision>
+    </PropertyGroup>
+    <Exec Command="git -C &quot;$(CraftArchitectRepoRoot)&quot; rev-parse HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" ItemName="_CraftArchitectHead" />
+    </Exec>
+    <Error Condition="'@(_CraftArchitectHead)' != '' and '@(_CraftArchitectHead)' != '$(CraftArchitectPinnedRevision)'"
+           Text="Craft Architect checkout at '$(CraftArchitectRepoRoot)' is at @(_CraftArchitectHead) but Squire pins $(CraftArchitectPinnedRevision) in eng/craft-architect.ref. Update the pin deliberately or build with -p:CraftArchitectAllowUnpinned=true." />
+  </Target>
+
   <Target Name="RejectDebugProjectReferencesInRelease" AfterTargets="ResolveProjectReferences" Condition="'$(Configuration)' == 'Release'">
     <ItemGroup>
       <_DebugProjectReference Include="@(_ResolvedProjectReferencePaths)" Condition="$([System.String]::Copy('%(FullPath)').Contains('\bin\Debug\'))" />

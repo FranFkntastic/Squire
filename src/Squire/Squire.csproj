@@ -17,6 +17,7 @@
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <FranthropyDalamudProject Condition="'$(FranthropyDalamudProject)' == ''">..\..\..\Franthropy\src\Franthropy.Dalamud\Franthropy.Dalamud.csproj</FranthropyDalamudProject>
     <CraftArchitectCoreProject Condition="'$(CraftArchitectCoreProject)' == ''">..\..\..\FFXIV Craft Architect C# Edition\src\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj</CraftArchitectCoreProject>
+    <ShouldUnsetParentConfigurationAndPlatform>false</ShouldUnsetParentConfigurationAndPlatform>
   </PropertyGroup>
 
   <ItemGroup>

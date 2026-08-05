@@ -20,7 +20,7 @@ public sealed class SquireCandidateFilterTests
         };
 
         Assert.Equal(2, filter.Apply(rows, "darksteel").Length);
-        Assert.Single(filter.Apply(rows, "-darksteel"));
+        Assert.Single(filter.Apply(rows, "not darksteel"));
     }
 
     [Theory]

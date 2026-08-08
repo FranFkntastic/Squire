@@ -92,6 +92,8 @@ internal sealed class SquireTabPanel : IDisposable
         IDataManager dataManager,
         IMarketAcquisitionListingSource marketListingSource,
         IPlayerAdvisorBaselineSource playerAdvisorBaselineSource,
+        IOutfitterRetainerMetadataSource retainerMetadataSource,
+        Func<uint> resolveCurrentClassJobId,
         Func<string> resolveAcquisitionRegion)
     {
         this.config = config;
@@ -131,14 +133,13 @@ internal sealed class SquireTabPanel : IDisposable
             advisorSession,
             reviewRegistry,
             marketListingSource,
+            retainerMetadataSource,
+            resolveCurrentClassJobId,
             resolveAcquisitionRegion,
             transfer => stageOutfitterTransfer?.Invoke(transfer));
-        selectedWorkspace = "Cleanup";
-        if (!string.Equals(config.Squire.SelectedWorkspace, selectedWorkspace, StringComparison.Ordinal))
-        {
-            config.Squire.SelectedWorkspace = selectedWorkspace;
-            config.Save();
-        }
+        selectedWorkspace = config.Squire.SelectedWorkspace is "Cleanup" or "Outfitter"
+            ? config.Squire.SelectedWorkspace
+            : "Outfitter";
         ruleStore = new SquireCleanupRuleStore(config);
         evidencePanel = new SquireEvidencePanel(ruleStore, reviewRegistry, Refresh);
         routeDiagnosticsPanel = new SquireRouteDiagnosticsPanel(actionAdapter, reviewRegistry, uiStateCapture);
@@ -210,7 +211,7 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void DrawOutfitter()
     {
-        advisorPanel.Draw();
+        advisorPanel.Draw(analysis?.Snapshot);
     }
 
     private void DrawCleanup()

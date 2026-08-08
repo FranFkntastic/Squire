@@ -21,9 +21,12 @@ public interface ISquireConfigurationStore
 [Serializable]
 public sealed class SquireConfiguration
 {
-    public string SelectedWorkspace { get; set; } = "Cleanup";
+    public string SelectedWorkspace { get; set; } = "Outfitter";
     public string OutfitterAdvisorContext { get; set; } = "OrdinaryResourceBenchmark";
     public int OutfitterAdvisorContextDefaultVersion { get; set; }
+    public string OutfitterTargetKey { get; set; } = string.Empty;
+    public string OutfitterTargetView { get; set; } = "Jobs";
+    public string OutfitterTargetSearch { get; set; } = string.Empty;
     public bool ShowProtected { get; set; }
     public bool ShowNonEquipment { get; set; }
     public string Search { get; set; } = string.Empty;

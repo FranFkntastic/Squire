@@ -103,6 +103,256 @@ public sealed class OutfitterPersistedAnalysisTests
         }
     }
 
+    [Fact]
+    public void Cache_restores_compatible_frontier_and_rebinds_unchanged_market_lineage()
+    {
+        var fixture = CreateCacheFixture();
+        var book = new OutfitterPersistedAnalysisBook(
+            OutfitterPersistedAnalysisBook.CurrentSchemaVersion,
+            1,
+            [fixture.Analysis]);
+
+        var restored = OutfitterPersistedAnalysisCache.TryRestore(
+            book,
+            fixture.Baseline,
+            CrafterAdvisorStatFamily.Instance,
+            CrafterAdvisorStatFamily.OrdinaryCraftContext,
+            fixture.Evidence,
+            out var analysis,
+            out var advice);
+
+        Assert.True(restored);
+        Assert.Equal(fixture.Analysis.AnalysisId, analysis.AnalysisId);
+        Assert.Equal(fixture.Advice.Nomination?.Candidate.SolutionId, advice.Nomination?.Candidate.SolutionId);
+        var refreshedEvidence = fixture.Evidence with
+        {
+            GenerationId = Guid.NewGuid(),
+            Revision = fixture.Evidence.Revision + 1,
+            CreatedAtUtc = fixture.Evidence.CreatedAtUtc.AddMinutes(10),
+            PublishedAtUtc = fixture.Evidence.PublishedAtUtc!.Value.AddMinutes(10),
+            Items = fixture.Evidence.Items.Select(item => item with
+            {
+                CapturedAtUtc = item.CapturedAtUtc.AddMinutes(10),
+                Listings = item.Listings.Select(listing => listing with
+                {
+                    CapturedAtUtc = listing.CapturedAtUtc.AddMinutes(10),
+                    ListingReviewedAtUtc = listing.ListingReviewedAtUtc.AddMinutes(10),
+                }).ToArray(),
+            }).ToArray(),
+        };
+
+        Assert.True(OutfitterPersistedAnalysisCache.TryRebindEquivalentMarketEvidence(
+            advice,
+            fixture.Evidence,
+            refreshedEvidence,
+            out var rebound));
+        var reboundOffer = Assert.Single(rebound.OffersByAllocation.Values);
+        Assert.Equal(refreshedEvidence.GenerationId, reboundOffer.Offer.Observation?.EvidenceGenerationId);
+    }
+
+    [Fact]
+    public void Cache_rejects_changed_player_baseline()
+    {
+        var fixture = CreateCacheFixture();
+        var book = new OutfitterPersistedAnalysisBook(
+            OutfitterPersistedAnalysisBook.CurrentSchemaVersion,
+            1,
+            [fixture.Analysis]);
+        var changed = fixture.Baseline with
+        {
+            TotalStats = fixture.Baseline.TotalStats.ToDictionary(
+                value => value.Key,
+                value => value.Key == EquipmentStatSemantic.CraftingPoints ? value.Value + 1 : value.Value),
+            FixedStats = fixture.Baseline.FixedStats.ToDictionary(
+                value => value.Key,
+                value => value.Key == EquipmentStatSemantic.CraftingPoints ? value.Value + 1 : value.Value),
+        };
+
+        Assert.False(OutfitterPersistedAnalysisCache.TryRestore(
+            book,
+            changed,
+            CrafterAdvisorStatFamily.Instance,
+            CrafterAdvisorStatFamily.OrdinaryCraftContext,
+            fixture.Evidence,
+            out _,
+            out _));
+    }
+
+    [Fact]
+    public async Task Cache_offer_table_round_trips_through_existing_store()
+    {
+        var fixture = CreateCacheFixture();
+        var directory = Path.Combine(Path.GetTempPath(), $"squire-outfitter-cache-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "analyses.json");
+        try
+        {
+            var store = new OutfitterPersistedAnalysisStore(path);
+            await store.UpsertAsync(fixture.Analysis);
+
+            var loaded = await store.LoadAsync();
+            var header = await File.ReadAllBytesAsync(path);
+
+            var persisted = Assert.Single(loaded.Analyses);
+            var offer = Assert.Single(persisted.Offers);
+            Assert.Equal(0x1f, header[0]);
+            Assert.Equal(0x8b, header[1]);
+            Assert.Equal(fixture.Evidence.GenerationId, offer.Offer.Observation?.EvidenceGenerationId);
+            Assert.Equal("listing-cache", offer.ObservationId);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Cache_store_keeps_one_entry_per_target_profile_and_region()
+    {
+        var fixture = CreateCacheFixture();
+        var directory = Path.Combine(Path.GetTempPath(), $"squire-outfitter-cache-slot-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "analyses.json");
+        try
+        {
+            var store = new OutfitterPersistedAnalysisStore(path);
+            await store.UpsertAsync(fixture.Analysis);
+            var replacement = fixture.Analysis with { AnalysisId = Guid.NewGuid() };
+
+            await store.UpsertAsync(replacement);
+
+            var persisted = Assert.Single((await store.LoadAsync()).Analyses);
+            Assert.Equal(replacement.AnalysisId, persisted.AnalysisId);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static AnalysisFixture CreateCacheFixture()
+    {
+        var fixture = CreateAnalysisFixture();
+        var now = fixture.Evidence.PublishedAtUtc!.Value;
+        var definition = new EquipmentItemDefinition(
+            99_001,
+            "Cached fixture tool",
+            1,
+            1,
+            EquipmentSlot.MainHand,
+            new HashSet<uint> { CrafterUtilityProfile.BlacksmithClassJobId },
+            1,
+            true,
+            false,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            false);
+        var key = new EquipmentOfferKey(
+            definition.ItemId,
+            EquipmentQuality.Normal,
+            EquipmentAcquisitionSourceKind.MarketBoard,
+            "market:universalis:64:99001:Normal");
+        var listing = new OutfitterMarketListingEvidence(
+            definition.ItemId,
+            EquipmentQuality.Normal,
+            "listing-cache",
+            "Siren",
+            64,
+            "Retainer",
+            "retainer-cache",
+            1,
+            100,
+            now,
+            now,
+            "revision-cache");
+        var evidence = fixture.Evidence with
+        {
+            Items =
+            [
+                new(
+                    definition.ItemId,
+                    OutfitterMarketEvidenceItemStatus.Fresh,
+                    [listing],
+                    now,
+                    listing.SourceRevision),
+            ],
+        };
+        var observation = new EquipmentOfferObservation(
+            key,
+            evidence.GenerationId,
+            listing.ListingId,
+            listing.ListingReviewedAtUtc,
+            ObservableMarketRow: new(
+                listing.ListingId,
+                listing.ItemId,
+                listing.Quality,
+                listing.Quantity,
+                listing.UnitPriceGil,
+                listing.WorldName,
+                listing.RetainerName),
+            World: listing.WorldName,
+            AvailableQuantity: listing.Quantity,
+            UnitPriceGil: listing.UnitPriceGil);
+        var offer = new EquipmentExactSolverOffer(
+            new(
+                definition,
+                EquipmentAcquisitionSourceKind.MarketBoard,
+                "Market board · Siren",
+                listing.UnitPriceGil,
+                Quality: listing.Quality,
+                SourceCatalogKey: key.SourceCatalogKey,
+                Observation: observation),
+            listing.ListingId,
+            new HashSet<EquipmentLoadoutPosition> { EquipmentLoadoutPosition.MainHand },
+            1,
+            EquipmentSolverUtilityVector.Empty,
+            listing.UnitPriceGil,
+            listing.WorldName,
+            null,
+            1,
+            new(0, 0, 0),
+            ["NQ", listing.WorldName]);
+        var originalSolution = fixture.Advice.Frontier!.Pareto.Frontier[0];
+        var solution = originalSolution with
+        {
+            Candidate = new(
+                originalSolution.Candidate.SolutionId,
+                [new(EquipmentLoadoutPosition.MainHand, key, 1, listing.ListingId)]),
+            AcquisitionCostGil = listing.UnitPriceGil,
+        };
+        var exact = new EquipmentExactFrontierResult(
+            new([solution], [], [], []),
+            fixture.Advice.Frontier.Diagnostics,
+            []);
+        var advice = fixture.Advice with
+        {
+            Frontier = exact,
+            Nomination = solution,
+            AuthorityBySolutionId = new Dictionary<string, AdvisorAuthorityAssessment>
+            {
+                [solution.Candidate.SolutionId] = fixture.Advice.AuthorityBySolutionId[originalSolution.Candidate.SolutionId],
+            },
+            OffersByAllocation = new Dictionary<EquipmentOfferAllocationKey, EquipmentExactSolverOffer>
+            {
+                [offer.AllocationKey] = offer,
+            },
+        };
+        var analysis = OutfitterPersistedAnalysis.Create(
+            fixture.Target,
+            fixture.Baseline,
+            CrafterAdvisorStatFamily.Instance,
+            CrafterAdvisorStatFamily.OrdinaryCraftContext,
+            evidence,
+            advice,
+            solution.Candidate.SolutionId,
+            createdAtUtc: now);
+        return new(fixture.Target, fixture.Baseline, evidence, advice, analysis);
+    }
+
     private static AnalysisFixture CreateAnalysisFixture()
     {
         var now = DateTimeOffset.Parse("2026-07-21T18:00:00Z");

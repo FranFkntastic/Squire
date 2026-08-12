@@ -1,13 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Franthropy.Dalamud.Equipment;
-using Franthropy.Dalamud.Persistence;
 using MarketMafioso.Squire.Observation;
 using MarketMafioso.Squire.Outfitter.Acquisition;
 using MarketMafioso.Squire.Outfitter.Crafting;
@@ -112,6 +112,8 @@ internal sealed record OutfitterPersistedAnalysis(
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset UpdatedAtUtc)
 {
+    public IReadOnlyList<EquipmentExactSolverOffer> Offers { get; init; } = [];
+
     public static OutfitterPersistedAnalysis Create(
         SavedGearsetTargetFingerprint target,
         PlayerAdvisorBaseline baseline,
@@ -182,7 +184,10 @@ internal sealed record OutfitterPersistedAnalysis(
             requiredOwned,
             craftHandoff,
             now,
-            now);
+            now)
+        {
+            Offers = advice.OffersByAllocation.Values.ToArray(),
+        };
         OutfitterPersistedAnalysisValidation.ValidateDocument(result);
         return result;
     }
@@ -202,7 +207,7 @@ internal sealed class OutfitterPersistedAnalysisStore
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true,
-        Converters = { new JsonStringEnumConverter() },
+        Converters = { new JsonStringEnumConverter(), new ReadOnlySetJsonConverterFactory() },
     };
     private readonly string path;
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -248,11 +253,11 @@ internal sealed class OutfitterPersistedAnalysisStore
                 };
                 OutfitterPersistedAnalysisValidation.ValidateDocument(saved);
                 var analyses = book.Analyses
-                    .Where(value => value.AnalysisId != saved.AnalysisId)
+                    .Where(value => value.AnalysisId != saved.AnalysisId && !SharesCacheSlot(value, saved))
                     .Append(saved)
                     .OrderByDescending(value => value.UpdatedAtUtc)
                     .ToArray();
-                AtomicJsonFile.Write(path, new OutfitterPersistedAnalysisBook(
+                AtomicGzipJsonFile.Write(path, new OutfitterPersistedAnalysisBook(
                     OutfitterPersistedAnalysisBook.CurrentSchemaVersion,
                     checked(book.Revision + 1),
                     analyses), JsonOptions);
@@ -265,11 +270,17 @@ internal sealed class OutfitterPersistedAnalysisStore
         }
     }
 
+    private static bool SharesCacheSlot(OutfitterPersistedAnalysis left, OutfitterPersistedAnalysis right) =>
+        string.Equals(left.Target.Value, right.Target.Value, StringComparison.Ordinal) &&
+        left.Profile == right.Profile &&
+        string.Equals(left.Evidence.SourceKey, right.Evidence.SourceKey, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(left.Evidence.Region, right.Evidence.Region, StringComparison.OrdinalIgnoreCase);
+
     private OutfitterPersistedAnalysisBook LoadCore()
     {
         if (!File.Exists(path))
             return OutfitterPersistedAnalysisBook.Empty;
-        var book = AtomicJsonFile.Read<OutfitterPersistedAnalysisBook>(path, JsonOptions)
+        var book = AtomicGzipJsonFile.Read<OutfitterPersistedAnalysisBook>(path, JsonOptions)
             ?? throw new InvalidDataException("Persisted Outfitter analysis document is empty.");
         if (!string.Equals(book.SchemaVersion, OutfitterPersistedAnalysisBook.CurrentSchemaVersion, StringComparison.Ordinal))
             throw new InvalidDataException($"Unsupported persisted Outfitter analysis schema '{book.SchemaVersion}'.");
@@ -279,6 +290,260 @@ internal sealed class OutfitterPersistedAnalysisStore
         foreach (var analysis in book.Analyses)
             OutfitterPersistedAnalysisValidation.ValidateDocument(analysis);
         return book;
+    }
+}
+
+internal static class AtomicGzipJsonFile
+{
+    public static T? Read<T>(string path, JsonSerializerOptions options)
+    {
+        using var file = File.OpenRead(path);
+        if (file.Length >= 2)
+        {
+            var first = file.ReadByte();
+            var second = file.ReadByte();
+            file.Position = 0;
+            if (first == 0x1f && second == 0x8b)
+            {
+                using var gzip = new GZipStream(file, CompressionMode.Decompress);
+                return JsonSerializer.Deserialize<T>(gzip, options);
+            }
+        }
+        return JsonSerializer.Deserialize<T>(file, options);
+    }
+
+    public static void Write<T>(string path, T value, JsonSerializerOptions options)
+    {
+        var directory = Path.GetDirectoryName(path)
+            ?? throw new InvalidOperationException("Persisted Outfitter analysis path has no directory.");
+        Directory.CreateDirectory(directory);
+        var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            using (var file = new FileStream(
+                       temporaryPath,
+                       FileMode.CreateNew,
+                       FileAccess.Write,
+                       FileShare.None,
+                       64 * 1024,
+                       FileOptions.WriteThrough))
+            {
+                using (var gzip = new GZipStream(file, CompressionLevel.SmallestSize, leaveOpen: true))
+                    JsonSerializer.Serialize(gzip, value, options);
+                file.Flush(flushToDisk: true);
+            }
+            File.Move(temporaryPath, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+                File.Delete(temporaryPath);
+        }
+    }
+}
+
+internal sealed class ReadOnlySetJsonConverterFactory : JsonConverterFactory
+{
+    public override bool CanConvert(Type typeToConvert) =>
+        typeToConvert.IsGenericType &&
+        typeToConvert.GetGenericTypeDefinition() == typeof(IReadOnlySet<>);
+
+    public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options)
+    {
+        var elementType = typeToConvert.GetGenericArguments()[0];
+        return (JsonConverter)Activator.CreateInstance(
+            typeof(ReadOnlySetJsonConverter<>).MakeGenericType(elementType))!;
+    }
+
+    private sealed class ReadOnlySetJsonConverter<T> : JsonConverter<IReadOnlySet<T>>
+        where T : notnull
+    {
+        public override IReadOnlySet<T> Read(
+            ref Utf8JsonReader reader,
+            Type typeToConvert,
+            JsonSerializerOptions options) =>
+            JsonSerializer.Deserialize<HashSet<T>>(ref reader, options) ?? [];
+
+        public override void Write(
+            Utf8JsonWriter writer,
+            IReadOnlySet<T> value,
+            JsonSerializerOptions options) =>
+            JsonSerializer.Serialize(writer, value.ToArray(), options);
+    }
+}
+
+internal static class OutfitterPersistedAnalysisCache
+{
+    public static bool TryRestore(
+        OutfitterPersistedAnalysisBook book,
+        PlayerAdvisorBaseline baseline,
+        IAdvisorStatFamily family,
+        AdvisorUtilityContextDescriptor context,
+        OutfitterMarketEvidenceBook evidence,
+        out OutfitterPersistedAnalysis analysis,
+        out MinerBotanistReadOnlyAdvice advice)
+    {
+        ArgumentNullException.ThrowIfNull(book);
+        ArgumentNullException.ThrowIfNull(baseline);
+        ArgumentNullException.ThrowIfNull(family);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(evidence);
+        analysis = null!;
+        advice = null!;
+        if (baseline is not
+            {
+                Status: PlayerAdvisorBaselineStatus.Complete,
+                Target: { Kind: PlayerAdvisorBaselineTargetKind.SavedGearset } target,
+            })
+        {
+            return false;
+        }
+
+        var availableInstances = new HashSet<EquipmentInstanceFingerprint>(
+            baseline.EquipmentSnapshot?.Instances.Select(value => value.Fingerprint) ?? [],
+            EquipmentInstanceFingerprintComparer.Instance);
+        analysis = book.Analyses
+            .Where(value => value.Offers.Count > 0)
+            .Where(value => string.Equals(value.Target.Value, target.AuthorityFingerprint, StringComparison.Ordinal))
+            .Where(value => string.Equals(
+                value.BaselineAuthorityFingerprint,
+                PlayerAdvisorAuthorityFingerprint.Capture(baseline).Value,
+                StringComparison.Ordinal))
+            .Where(value =>
+                string.Equals(value.Profile.ProfileId, family.ProfileDescriptor.Id, StringComparison.Ordinal) &&
+                string.Equals(value.Profile.ProfileVersion, family.ProfileDescriptor.Version, StringComparison.Ordinal) &&
+                value.Profile.CalibrationState == family.ProfileDescriptor.CalibrationState &&
+                string.Equals(value.Profile.ContextId, context.Id, StringComparison.Ordinal))
+            .Where(value => MatchesEvidence(value, evidence))
+            .Where(value => value.Offers
+                .Where(offer => offer.Offer is
+                {
+                    SourceKind: EquipmentAcquisitionSourceKind.Owned,
+                    Instance: { } instance,
+                })
+                .All(offer => availableInstances.Contains(offer.Offer.Instance!.Fingerprint)))
+            .OrderByDescending(value => value.UpdatedAtUtc)
+            .FirstOrDefault()!;
+        if (analysis is null)
+            return false;
+
+        try
+        {
+            var restored = analysis;
+            var offers = restored.Offers.ToDictionary(value => value.AllocationKey);
+            var nomination = restored.NominationSolutionId is null
+                ? null
+                : restored.Frontier.SingleOrDefault(value =>
+                    string.Equals(value.Candidate.SolutionId, restored.NominationSolutionId, StringComparison.Ordinal));
+            var firstSolutionId = restored.Frontier[0].Candidate.SolutionId;
+            advice = new(
+                MinerBotanistAdvisorStatus.Complete,
+                MinerBotanistReadOnlyAdvisor.AdvisoryRule,
+                new(
+                    new(restored.Frontier, [], [], []),
+                    new(0, 0, 0, 0, restored.Frontier.Count, restored.Frontier.Count, restored.Frontier.Count, 16, firstSolutionId, TimeSpan.Zero),
+                    []),
+                nomination,
+                new Dictionary<string, AdvisorAuthorityAssessment>(restored.AuthorityBySolutionId, StringComparer.Ordinal),
+                offers,
+                "Restored the last compatible evaluation while current market evidence is checked.");
+            return true;
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            analysis = null!;
+            advice = null!;
+            return false;
+        }
+    }
+
+    public static bool TryRebindEquivalentMarketEvidence(
+        MinerBotanistReadOnlyAdvice advice,
+        OutfitterMarketEvidenceBook previousEvidence,
+        OutfitterMarketEvidenceBook currentEvidence,
+        out MinerBotanistReadOnlyAdvice rebound)
+    {
+        ArgumentNullException.ThrowIfNull(advice);
+        ArgumentNullException.ThrowIfNull(previousEvidence);
+        ArgumentNullException.ThrowIfNull(currentEvidence);
+        rebound = null!;
+        if (!previousEvidence.IsPublishable || !currentEvidence.IsPublishable ||
+            advice.OffersByAllocation.Values.Any(value => value.Offer.SourceKind == EquipmentAcquisitionSourceKind.Craft))
+        {
+            return false;
+        }
+
+        var offers = new List<EquipmentExactSolverOffer>(advice.OffersByAllocation.Count);
+        foreach (var offer in advice.OffersByAllocation.Values)
+        {
+            if (offer.Offer.SourceKind != EquipmentAcquisitionSourceKind.MarketBoard)
+            {
+                offers.Add(offer);
+                continue;
+            }
+
+            var observation = offer.Offer.GetValidatedObservation();
+            var oldListing = FindListing(previousEvidence, offer, observation);
+            var newListing = FindListing(currentEvidence, offer, observation);
+            if (observation is null || oldListing is null || newListing is null ||
+                !string.Equals(oldListing.SourceRevision, newListing.SourceRevision, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var reboundObservation = observation with
+            {
+                EvidenceGenerationId = currentEvidence.GenerationId,
+                ReviewedAt = newListing.ListingReviewedAtUtc,
+                ObservableMarketRow = new(
+                    newListing.ListingId,
+                    newListing.ItemId,
+                    newListing.Quality,
+                    newListing.Quantity,
+                    newListing.UnitPriceGil,
+                    newListing.WorldName,
+                    newListing.RetainerName),
+                World = newListing.WorldName,
+                AvailableQuantity = newListing.Quantity,
+                UnitPriceGil = newListing.UnitPriceGil,
+            };
+            offers.Add(offer with { Offer = offer.Offer with { Observation = reboundObservation } });
+        }
+
+        rebound = advice with
+        {
+            OffersByAllocation = offers.ToDictionary(value => value.AllocationKey),
+            Diagnostic = "Market listings are unchanged; the saved evaluation remains current.",
+        };
+        return true;
+    }
+
+    public static bool MatchesEvidence(OutfitterPersistedAnalysis analysis, OutfitterMarketEvidenceBook evidence) =>
+        evidence.IsPublishable &&
+        analysis.Evidence.GenerationId == evidence.GenerationId &&
+        analysis.Evidence.Revision == evidence.Revision &&
+        string.Equals(analysis.Evidence.SchemaVersion, evidence.SchemaVersion, StringComparison.Ordinal) &&
+        string.Equals(analysis.Evidence.SourceKey, evidence.SourceKey, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(analysis.Evidence.Region, evidence.Region, StringComparison.OrdinalIgnoreCase);
+
+    private static OutfitterMarketListingEvidence? FindListing(
+        OutfitterMarketEvidenceBook evidence,
+        EquipmentExactSolverOffer offer,
+        EquipmentOfferObservation? observation)
+    {
+        if (observation?.ObservableMarketRow is not { } row)
+            return null;
+        return evidence.Items
+            .Where(value => value.ItemId == offer.Offer.Definition.ItemId &&
+                value.Status == OutfitterMarketEvidenceItemStatus.Fresh)
+            .SelectMany(value => value.Listings)
+            .SingleOrDefault(value =>
+                string.Equals(value.ListingId, observation.ObservationId, StringComparison.Ordinal) &&
+                value.ItemId == row.ItemId &&
+                value.Quality == row.Quality &&
+                value.Quantity == row.Quantity &&
+                value.UnitPriceGil == row.UnitPriceGil &&
+                string.Equals(value.WorldName, observation.World, StringComparison.OrdinalIgnoreCase));
     }
 }
 
@@ -389,13 +654,17 @@ internal static class OutfitterPersistedAnalysisValidation
             string.IsNullOrWhiteSpace(analysis.BaselineAuthorityFingerprint) ||
             analysis.Evidence is null || analysis.Evidence.GenerationId == Guid.Empty || analysis.Evidence.Revision < 0 ||
             analysis.Evidence.PublishedAtUtc == default || analysis.Frontier is null || analysis.Frontier.Count == 0 ||
-            analysis.AuthorityBySolutionId is null || analysis.RequiredOwnedInstances is null ||
+            analysis.AuthorityBySolutionId is null || analysis.RequiredOwnedInstances is null || analysis.Offers is null ||
             analysis.CreatedAtUtc == default || analysis.UpdatedAtUtc < analysis.CreatedAtUtc)
         {
             throw new InvalidDataException("Persisted Outfitter analysis is structurally invalid.");
         }
         var solutionIds = analysis.Frontier.Select(value => value.Candidate.SolutionId).ToArray();
+        var offerKeys = analysis.Offers.Select(value => value.AllocationKey).ToArray();
         if (solutionIds.Any(string.IsNullOrWhiteSpace) || solutionIds.Distinct(StringComparer.Ordinal).Count() != solutionIds.Length ||
+            offerKeys.Distinct().Count() != offerKeys.Length ||
+            offerKeys.Length > 0 &&
+            analysis.Frontier.SelectMany(value => value.Candidate.Selections).Any(value => !offerKeys.Contains(value.AllocationKey)) ||
             analysis.AuthorityBySolutionId.Keys.Any(key => !solutionIds.Contains(key, StringComparer.Ordinal)) ||
             analysis.NominationSolutionId is not null && !solutionIds.Contains(analysis.NominationSolutionId, StringComparer.Ordinal) ||
             analysis.SelectedSolutionId is not null && !solutionIds.Contains(analysis.SelectedSolutionId, StringComparer.Ordinal) ||

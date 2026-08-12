@@ -13,6 +13,7 @@ internal sealed class SquireWindow : Window
     private LegacyMmfImportPreview migration;
     private readonly SquireTabPanel featurePanel;
     private readonly Franthropy.Dalamud.AgentBridge.AgentBridgeUiReviewRegistry reviewRegistry;
+    private bool clearForcedExpansion;
 
     public SquireWindow(
         Action save,
@@ -40,6 +41,23 @@ internal sealed class SquireWindow : Window
         if (migration.CanImport)
             DrawMigrationRecovery();
         reviewRegistry.EndFrame();
+    }
+
+    public void OpenExpanded()
+    {
+        IsOpen = true;
+        Collapsed = false;
+        CollapsedCondition = ImGuiCond.Always;
+        clearForcedExpansion = true;
+    }
+
+    public override void PostDraw()
+    {
+        if (!clearForcedExpansion)
+            return;
+        Collapsed = null;
+        CollapsedCondition = ImGuiCond.None;
+        clearForcedExpansion = false;
     }
 
     private void DrawMigrationRecovery()

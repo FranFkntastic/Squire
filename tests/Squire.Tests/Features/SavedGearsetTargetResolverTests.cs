@@ -42,7 +42,7 @@ public sealed class SavedGearsetTargetResolverTests
     }
 
     [Fact]
-    public void Resolve_exposes_ambiguous_duplicate_as_target_gap()
+    public void Resolve_assigns_one_of_multiple_equivalent_owned_instances_deterministically()
     {
         var head = Reference(EquipmentLoadoutPosition.Head, 10_001, materiaId: 501, materiaGrade: 11);
         var target = Target([head]);
@@ -53,10 +53,46 @@ public sealed class SavedGearsetTargetResolverTests
 
         var result = SavedGearsetTargetResolver.Resolve(snapshot, target);
 
+        Assert.Equal(SavedGearsetTargetResolutionStatus.Complete, result.Status);
+        var resolved = Assert.Single(result.Slots, slot => slot.Position == EquipmentLoadoutPosition.Head);
+        Assert.True(resolved.IsResolved);
+        Assert.Equal(3, resolved.Instance!.Fingerprint.SlotIndex);
+    }
+
+    [Fact]
+    public void Resolve_assigns_identical_left_and_right_rings_to_distinct_owned_copies()
+    {
+        var left = Reference(EquipmentLoadoutPosition.LeftRing, 10_001, materiaId: 501, materiaGrade: 11);
+        var right = left with { Position = EquipmentLoadoutPosition.RightRing };
+        var target = Target([left, right]);
+        var snapshot = Snapshot(
+            target.Gearset!,
+            [Instance(3, left), Instance(8, right)],
+            [Definition(left)]);
+
+        var result = SavedGearsetTargetResolver.Resolve(snapshot, target);
+
+        Assert.Equal(SavedGearsetTargetResolutionStatus.Complete, result.Status);
+        var leftInstance = Assert.Single(result.Slots, slot => slot.Position == EquipmentLoadoutPosition.LeftRing).Instance;
+        var rightInstance = Assert.Single(result.Slots, slot => slot.Position == EquipmentLoadoutPosition.RightRing).Instance;
+        Assert.NotNull(leftInstance);
+        Assert.NotNull(rightInstance);
+        Assert.NotEqual(leftInstance.Fingerprint.SlotIndex, rightInstance.Fingerprint.SlotIndex);
+    }
+
+    [Fact]
+    public void Resolve_rejects_identical_ring_assignments_when_only_one_owned_copy_exists()
+    {
+        var left = Reference(EquipmentLoadoutPosition.LeftRing, 10_001, materiaId: 501, materiaGrade: 11);
+        var right = left with { Position = EquipmentLoadoutPosition.RightRing };
+        var target = Target([left, right]);
+        var snapshot = Snapshot(target.Gearset!, [Instance(3, left)], [Definition(left)]);
+
+        var result = SavedGearsetTargetResolver.Resolve(snapshot, target);
+
         Assert.Equal(SavedGearsetTargetResolutionStatus.Incomplete, result.Status);
-        var gap = Assert.Single(result.Slots, slot => slot.Position == EquipmentLoadoutPosition.Head);
-        Assert.False(gap.IsResolved);
-        Assert.Contains("multiple owned instances", gap.Diagnostic, StringComparison.Ordinal);
+        var gap = Assert.Single(result.Slots, slot => !slot.IsResolved);
+        Assert.Contains("distinct owned copy", gap.Diagnostic, StringComparison.Ordinal);
     }
 
     [Fact]

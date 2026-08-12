@@ -10,6 +10,8 @@ using Franthropy.Dalamud.UI.Plots;
 using MarketMafioso.AgentBridge;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Squire;
+using MarketMafioso.Squire.Observation;
+using MarketMafioso.Squire.Outfitter;
 using MarketMafioso.Squire.Outfitter.Crafting;
 using MarketMafioso.Squire.Outfitter.Utility;
 using MarketMafioso.Squire.Outfitter.Acquisition;
@@ -28,7 +30,10 @@ internal sealed class MinerBotanistAdvisorPanel
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly Action<OutfitterWorkbenchTransfer> stageTransfer;
     private readonly IMarketAcquisitionListingSource listingSource;
+    private readonly IOutfitterRetainerMetadataSource retainerMetadataSource;
+    private readonly Func<uint> resolveCurrentClassJobId;
     private readonly Func<string> resolveRegion;
+    private readonly OutfitterTargetCatalog targetCatalog = new();
     private readonly ParetoFrontierPlotBuilder plotBuilder = new();
     private readonly DalamudPlotContainer plotContainer = new();
     private AdvisorUtilityContextDescriptor context = GathererAdvisorStatFamily.Instance.ProfileDescriptor.DefaultContext;
@@ -37,10 +42,16 @@ internal sealed class MinerBotanistAdvisorPanel
     private AdvisorFrontierWindow? frontierWindow;
     private ParetoFrontierPlotModel? frontierPlot;
     private HashSet<string> frontierWarningIds = new(StringComparer.Ordinal);
-    private IReadOnlyList<AdvisorAdjacentTradeoff> adjacentTradeoffs = [];
     private string? selectedSolutionId;
     private string? handoffStatus;
-    private AdvisorFrontierView frontierView = AdvisorFrontierView.Solutions;
+    private AdvisorFrontierView frontierView = AdvisorFrontierView.List;
+    private bool planComparisonExpanded = true;
+    private CharacterEquipmentSnapshot? targetSnapshot;
+    private IReadOnlyList<OutfitterTarget> targets = [];
+    private OutfitterTarget? selectedTarget;
+    private string targetSearch;
+    private OutfitterTargetView targetView;
+    private DateTimeOffset refreshRetainersAfter = DateTimeOffset.MinValue;
 #if DEBUG
     private static readonly MinerBotanistAdvisorSyntheticScenarioKind[] SyntheticScenarioOrder =
     [
@@ -58,6 +69,7 @@ internal sealed class MinerBotanistAdvisorPanel
     private MinerBotanistAdvisorSyntheticScenarioKind syntheticScenarioKind;
     private readonly HashSet<AdvisorUtilityContextDescriptor> visibleSyntheticContexts =
         [GathererAdvisorStatFamily.Instance.ProfileDescriptor.DefaultContext];
+    private bool showDeveloperReview;
 #endif
 
     public MinerBotanistAdvisorPanel(
@@ -65,6 +77,8 @@ internal sealed class MinerBotanistAdvisorPanel
         MinerBotanistAdvisorSession session,
         AgentBridgeUiReviewRegistry reviewRegistry,
         IMarketAcquisitionListingSource listingSource,
+        IOutfitterRetainerMetadataSource retainerMetadataSource,
+        Func<uint> resolveCurrentClassJobId,
         Func<string> resolveRegion,
         Action<OutfitterWorkbenchTransfer> stageTransfer)
     {
@@ -72,12 +86,38 @@ internal sealed class MinerBotanistAdvisorPanel
         this.session = session ?? throw new ArgumentNullException(nameof(session));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
         this.listingSource = listingSource ?? throw new ArgumentNullException(nameof(listingSource));
+        this.retainerMetadataSource = retainerMetadataSource ?? throw new ArgumentNullException(nameof(retainerMetadataSource));
+        this.resolveCurrentClassJobId = resolveCurrentClassJobId ?? throw new ArgumentNullException(nameof(resolveCurrentClassJobId));
         this.resolveRegion = resolveRegion ?? throw new ArgumentNullException(nameof(resolveRegion));
         this.stageTransfer = stageTransfer ?? throw new ArgumentNullException(nameof(stageTransfer));
         context = GathererAdvisorStatFamily.Instance.ResolveContext(config.Squire.OutfitterAdvisorContext);
+        targetSearch = config.Squire.OutfitterTargetSearch;
+        targetView = Enum.TryParse<OutfitterTargetView>(config.Squire.OutfitterTargetView, out var storedTargetView)
+            ? storedTargetView
+            : OutfitterTargetView.Jobs;
     }
 
-    public void Draw()
+    public void Draw(CharacterEquipmentSnapshot? snapshot)
+    {
+        RefreshTargets(snapshot);
+        if (!ImGui.BeginTable(
+                "##SquireOutfitterNorthStar",
+                2,
+                ImGuiTableFlags.Resizable | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.NoSavedSettings,
+                new Vector2(0, Math.Max(360f, ImGui.GetContentRegionAvail().Y))))
+            return;
+
+        ImGui.TableSetupColumn("Targets", ImGuiTableColumnFlags.WidthFixed, 310f);
+        ImGui.TableSetupColumn("Loadout", ImGuiTableColumnFlags.WidthStretch, 1f);
+        ImGui.TableNextRow();
+        ImGui.TableNextColumn();
+        DrawTargets();
+        ImGui.TableNextColumn();
+        DrawLoadoutWorkspace(snapshot);
+        ImGui.EndTable();
+    }
+
+    private void DrawLoadoutWorkspace(CharacterEquipmentSnapshot? snapshot)
     {
 #if DEBUG
         PumpDryRunFixture();
@@ -94,6 +134,7 @@ internal sealed class MinerBotanistAdvisorPanel
             ? syntheticReviewAdvice
             : syntheticReviewActive ? null : displayedAdvice;
 #endif
+        DrawSelectedTargetHeader(snapshot);
         DrawControls(state);
 #if DEBUG
         if (syntheticReviewActive)
@@ -143,7 +184,12 @@ internal sealed class MinerBotanistAdvisorPanel
         }
         ImGui.Separator();
 
-        if (displayedAdvice is not { Frontier: { } frontier } advice || frontier.Pareto.Frontier.Count == 0)
+        var adviceMatchesTarget = selectedTarget is not null &&
+                                  string.Equals(session.AdviceTargetKey, selectedTarget.Key, StringComparison.Ordinal);
+#if DEBUG
+        adviceMatchesTarget |= syntheticReviewActive;
+#endif
+        if (!adviceMatchesTarget || displayedAdvice is not { Frontier: { } frontier } advice || frontier.Pareto.Frontier.Count == 0)
         {
 #if DEBUG
             if (syntheticReviewActive)
@@ -171,72 +217,67 @@ internal sealed class MinerBotanistAdvisorPanel
 
     private void DrawAdvisorWorkspace(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
     {
-        const float wideLayoutMinimum = 980f;
-        if (ImGui.GetContentRegionAvail().X < wideLayoutMinimum ||
-            !ImGui.BeginTable("##SquireAdvisorWorkspace", 2,
-                ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingStretchProp))
-        {
-            DrawSelectedDecision(advice, selected);
-            ImGui.Separator();
-            DrawFrontierExplorer(advice, selected);
-            return;
-        }
-
-        ImGui.TableSetupColumn("Selected decision", ImGuiTableColumnFlags.WidthStretch, 1.65f);
-        ImGui.TableSetupColumn("Exact frontier", ImGuiTableColumnFlags.WidthStretch, 0.85f);
-        ImGui.TableNextRow();
-        ImGui.TableNextColumn();
         DrawSelectedDecision(advice, selected);
-        ImGui.TableNextColumn();
-        DrawFrontierExplorer(advice, selected);
-        ImGui.EndTable();
     }
 
     private void DrawSelectedDecision(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
     {
-        var selectedOffers = selected.Candidate.Selections
-            .Select(selection => advice.OffersByAllocation.GetValueOrDefault(selection.AllocationKey))
-            .Where(offer => offer is not null)
-            .DistinctBy(offer => offer!.AllocationKey)
-            .Cast<EquipmentExactSolverOffer>()
-            .ToArray();
-        var changedOffers = selectedOffers
-            .Where(offer => offer.Offer.SourceKind != EquipmentAcquisitionSourceKind.Owned)
-            .ToArray();
-        var changedSlotCount = selected.Candidate.Selections.Count(selection =>
-            advice.OffersByAllocation.TryGetValue(selection.AllocationKey, out var offer) &&
-            offer.Offer.SourceKind != EquipmentAcquisitionSourceKind.Owned);
-        var primary = changedOffers.FirstOrDefault(offer => offer.Offer.SourceKind == EquipmentAcquisitionSourceKind.Craft)
-            ?? changedOffers.FirstOrDefault();
-        var title = primary is null
-            ? "Keep current equipped loadout"
-            : $"{AcquisitionVerb(primary.Offer.SourceKind)} {primary.Offer.Definition.Name}";
+        var changedSlotCount = CountChangedPositions(advice, selected);
 
         ImGui.TextColored(MarketMafiosoUiTheme.Muted,
             advice.Nomination?.Candidate.SolutionId == selected.Candidate.SolutionId
-                ? "RECOMMENDED UPGRADE"
-                : "ALTERNATIVE OPTION");
-        ImGui.TextColored(MarketMafiosoUiTheme.Header, title);
+                ? "RECOMMENDED LOADOUT"
+                : "ALTERNATIVE LOADOUT");
         ImGui.SameLine();
         ImGui.TextDisabled($"{changedSlotCount:N0} changed slot{(changedSlotCount == 1 ? string.Empty : "s")}");
         DrawDecisionSummary(advice, selected);
+        DrawSelectedLoadout(advice, selected);
+        if (frontierPresentation!.Count > 1)
+            DrawPlanComparisonDrawer(advice, selected);
         DrawAcquisitionChecklist(advice, selected);
-
-        if (ImGui.CollapsingHeader($"Full selected loadout ({selected.Candidate.Selections.Count:N0} slots, {changedSlotCount:N0} changes)##SquireAdvisorLoadoutDisclosure"))
-            DrawSelectedLoadout(advice, selected);
-        if (adjacentTradeoffs.Count > 0 && ImGui.CollapsingHeader("Adjacent tradeoffs##SquireAdvisorTradeoffsDisclosure"))
-            DrawAdjacentTradeoffs(advice);
     }
 
-    private void DrawFrontierExplorer(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
+    private void DrawPlanComparisonDrawer(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
     {
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "COMPARE OPTIONS");
+        ImGui.Spacing();
+        if (!ImGui.BeginTable(
+                "##SquireAdvisorPlanComparisonHeader",
+                4,
+                ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp))
+            return;
+        ImGui.TableSetupColumn("Comparison", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("List", ImGuiTableColumnFlags.WidthFixed, 46f);
+        ImGui.TableSetupColumn("Chart", ImGuiTableColumnFlags.WidthFixed, 52f);
+        ImGui.TableSetupColumn("Disclosure", ImGuiTableColumnFlags.WidthFixed, 72f);
+        ImGui.TableNextRow();
+        ImGui.TableNextColumn();
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Compare plans");
         ImGui.SameLine();
-        DrawFrontierViewButton("List", AdvisorFrontierView.Solutions);
-        ImGui.SameLine();
-        DrawFrontierViewButton("Chart", AdvisorFrontierView.Plot);
+        ImGui.TextColored(
+            MarketMafiosoUiTheme.Muted,
+            $"{frontierPresentation!.Count:N0} non-dominated plan{(frontierPresentation.Count == 1 ? string.Empty : "s")}");
+        ImGui.TableNextColumn();
+        DrawFrontierViewButton("List", AdvisorFrontierView.List);
+        ImGui.TableNextColumn();
+        DrawFrontierViewButton("Chart", AdvisorFrontierView.Chart);
+        ImGui.TableNextColumn();
+        var disclosureLabel = planComparisonExpanded ? "Collapse" : "Expand";
+        if (ImGui.SmallButton($"{disclosureLabel}##SquireAdvisorPlanComparisonDisclosure"))
+            planComparisonExpanded = !planComparisonExpanded;
+        RegisterLastControl(
+            "squire.outfitter.advisor.plan-comparison.disclosure",
+            $"{disclosureLabel} plan comparison",
+            AgentBridgeUiControlKind.Button,
+            true,
+            planComparisonExpanded,
+            planComparisonExpanded ? "expanded" : "collapsed",
+            () => planComparisonExpanded = !planComparisonExpanded);
+        ImGui.EndTable();
 
-        if (frontierView == AdvisorFrontierView.Plot)
+        if (!planComparisonExpanded)
+            return;
+
+        if (frontierView == AdvisorFrontierView.Chart)
             DrawFrontier(advice, selected);
         else
             DrawSolutionRail(advice, selected);
@@ -257,9 +298,249 @@ internal sealed class MinerBotanistAdvisorPanel
             () => frontierView = view);
     }
 
+    private void RefreshTargets(CharacterEquipmentSnapshot? snapshot)
+    {
+        if (snapshot is null)
+            return;
+        var refreshRetainers = DateTimeOffset.UtcNow >= refreshRetainersAfter;
+        if (targetSnapshot?.GenerationId == snapshot.GenerationId && !refreshRetainers)
+            return;
+
+        var metadata = retainerMetadataSource.ReadAll();
+        targets = targetCatalog.Build(
+            snapshot,
+            new Dictionary<ulong, global::MarketMafioso.CachedRetainer>(),
+            metadata);
+        targetSnapshot = snapshot;
+        if (refreshRetainers)
+            refreshRetainersAfter = DateTimeOffset.UtcNow.AddSeconds(30);
+
+        var selectedKey = selectedTarget?.Key;
+        selectedTarget = targets.FirstOrDefault(value => value.Kind == OutfitterTargetKind.Gearset && value.Key == selectedKey)
+                         ?? targets.FirstOrDefault(value => value.Kind == OutfitterTargetKind.Gearset && value.Key == config.Squire.OutfitterTargetKey)
+                         ?? targets.FirstOrDefault(value => value.Kind == OutfitterTargetKind.Gearset && value.Job?.ClassJobId == resolveCurrentClassJobId() && IsSupported(value))
+                         ?? targets.FirstOrDefault(value => value.Kind == OutfitterTargetKind.Gearset && IsSupported(value));
+        if (selectedTarget is not null && config.Squire.OutfitterTargetKey != selectedTarget.Key)
+        {
+            config.Squire.OutfitterTargetKey = selectedTarget.Key;
+            config.Save();
+        }
+        ResolveContextForSelectedTarget();
+    }
+
+    private void DrawTargets()
+    {
+        DrawTargetViewButton(OutfitterTargetView.Jobs, $"Jobs  {targets.Count(value => value.Kind == OutfitterTargetKind.Job):N0}");
+        ImGui.SameLine();
+        DrawTargetViewButton(OutfitterTargetView.Retainers, $"Retainers  {targets.Count(value => value.Kind == OutfitterTargetKind.Retainer):N0}");
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputTextWithHint("##SquireOutfitterTargetSearch", "Search jobs or retainers", ref targetSearch, 120))
+        {
+            config.Squire.OutfitterTargetSearch = targetSearch;
+            config.Save();
+        }
+
+        ImGui.BeginChild("##SquireOutfitterTargets", new Vector2(0, -1), true);
+        if (targetView == OutfitterTargetView.Jobs)
+            DrawJobTargets();
+        else
+            DrawRetainerTargets();
+        ImGui.EndChild();
+    }
+
+    private void DrawTargetViewButton(OutfitterTargetView view, string label)
+    {
+        var selected = targetView == view;
+        if (ImGui.Selectable($"{label}##SquireOutfitterTargetView{view}", selected, ImGuiSelectableFlags.None, new Vector2(147f, 0)))
+        {
+            targetView = view;
+            config.Squire.OutfitterTargetView = view.ToString();
+            config.Save();
+        }
+        RegisterLastControl(
+            $"squire.outfitter.target-view.{view.ToString().ToLowerInvariant()}",
+            $"Show Outfitter {view.ToString().ToLowerInvariant()}",
+            AgentBridgeUiControlKind.Select,
+            true,
+            selected,
+            view.ToString(),
+            () =>
+            {
+                targetView = view;
+                config.Squire.OutfitterTargetView = view.ToString();
+                config.Save();
+            });
+    }
+
+    private void DrawJobTargets()
+    {
+        var jobs = targets
+            .Where(value => value.Kind == OutfitterTargetKind.Job)
+            .Where(MatchesTargetSearch)
+            .OrderBy(value => DisciplineOrder(value.Job?.Discipline ?? EquipmentDiscipline.Unknown))
+            .ThenBy(value => value.Job?.Role, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(value => value.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (jobs.Length == 0)
+        {
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "No jobs match this search.");
+            return;
+        }
+
+        EquipmentDiscipline? heading = null;
+        foreach (var job in jobs)
+        {
+            if (heading != job.Job?.Discipline)
+            {
+                heading = job.Job?.Discipline;
+                ImGui.TextColored(MarketMafiosoUiTheme.Muted, DisciplineLabel(heading ?? EquipmentDiscipline.Unknown));
+            }
+            var gearset = targets.FirstOrDefault(value =>
+                value.Kind == OutfitterTargetKind.Gearset && value.Job?.ClassJobId == job.Job?.ClassJobId);
+            var enabled = gearset is not null && IsSupported(gearset);
+            var selected = selectedTarget?.Job?.ClassJobId == job.Job?.ClassJobId;
+            var rowLabel = job.Job is { } jobIdentity
+                ? $"{job.Name}    {jobIdentity.Abbreviation} {jobIdentity.Level:N0}"
+                : job.Name;
+            if (!enabled)
+                ImGui.BeginDisabled();
+            if (ImGui.Selectable($"{rowLabel}##SquireOutfitterTarget{job.Key}", selected, ImGuiSelectableFlags.None, new Vector2(0, 21f)) && gearset is not null)
+                SelectGearset(gearset);
+            if (!enabled)
+                ImGui.EndDisabled();
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(enabled ? job.Subtitle : $"{job.Subtitle}\n{UnsupportedTargetDiagnostic(job)}");
+            var captured = gearset;
+            RegisterLastControl(
+                $"squire.outfitter.target.{job.Key}",
+                $"Select {job.Name}",
+                AgentBridgeUiControlKind.Select,
+                enabled,
+                selected,
+                job.Subtitle,
+                () =>
+                {
+                    if (captured is not null)
+                        SelectGearset(captured);
+                });
+        }
+    }
+
+    private void DrawRetainerTargets()
+    {
+        var retainers = targets
+            .Where(value => value.Kind == OutfitterTargetKind.Retainer)
+            .Where(MatchesTargetSearch)
+            .OrderBy(value => value.OwnerCharacterName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(value => value.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (retainers.Length == 0)
+        {
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "No known retainers match this search.");
+            return;
+        }
+        foreach (var retainer in retainers)
+        {
+            ImGui.BeginDisabled();
+            ImGui.Selectable($"{retainer.Name}##SquireOutfitterTarget{retainer.Key}", false, ImGuiSelectableFlags.None, new Vector2(0, 21f));
+            ImGui.EndDisabled();
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip($"{retainer.Subtitle}\n{retainer.Diagnostic}");
+        }
+    }
+
+    private void DrawSelectedTargetHeader(CharacterEquipmentSnapshot? snapshot)
+    {
+        if (snapshot is null)
+        {
+            ImGui.TextColored(MarketMafiosoUiTheme.Warning, "Waiting for current equipment evidence.");
+            return;
+        }
+        if (selectedTarget?.Job is not { } job)
+        {
+            ImGui.TextColored(MarketMafiosoUiTheme.Warning, "Choose a supported job with a saved gearset.");
+            return;
+        }
+
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, $"{selectedTarget.Name}");
+        ImGui.SameLine();
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{job.Abbreviation} · Lv. {job.Level:N0}");
+
+        var gearsets = targets
+            .Where(value => value.Kind == OutfitterTargetKind.Gearset && value.Job?.ClassJobId == job.ClassJobId)
+            .OrderBy(value => value.Gearset?.GearsetId)
+            .ToArray();
+        ImGui.SetNextItemWidth(260f);
+        if (ImGui.BeginCombo("Gearset baseline##SquireOutfitterGearset", selectedTarget.Name))
+        {
+            foreach (var gearset in gearsets)
+            {
+                if (ImGui.Selectable(gearset.Name, gearset.Key == selectedTarget.Key))
+                    SelectGearset(gearset);
+            }
+            ImGui.EndCombo();
+        }
+        ImGui.SameLine();
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Target Lv. {job.Level:N0}");
+    }
+
+    private void SelectGearset(OutfitterTarget target)
+    {
+        if (target.Kind != OutfitterTargetKind.Gearset || !IsSupported(target) || session.State.IsBusy)
+            return;
+        selectedTarget = target;
+        config.Squire.OutfitterTargetKey = target.Key;
+        config.Save();
+        lastAdvice = null;
+        selectedSolutionId = null;
+        handoffStatus = null;
+        ResolveContextForSelectedTarget();
+    }
+
+    private void ResolveContextForSelectedTarget()
+    {
+        if (selectedTarget?.Job is not { } job || AdvisorStatFamilies.Resolve(job.ClassJobId) is not { } family)
+            return;
+        context = family.ResolveContext(config.Squire.OutfitterAdvisorContext);
+    }
+
+    private IReadOnlyList<AdvisorUtilityContextDescriptor> ContextOptions() =>
+        selectedTarget?.Job is { } job && AdvisorStatFamilies.Resolve(job.ClassJobId) is { } family
+            ? family.ProfileDescriptor.Contexts
+            : ContextOrder;
+
+    private bool MatchesTargetSearch(OutfitterTarget target) => string.IsNullOrWhiteSpace(targetSearch) ||
+        target.Name.Contains(targetSearch, StringComparison.OrdinalIgnoreCase) ||
+        target.Subtitle.Contains(targetSearch, StringComparison.OrdinalIgnoreCase) ||
+        (target.OwnerCharacterName?.Contains(targetSearch, StringComparison.OrdinalIgnoreCase) ?? false);
+
+    private static bool IsSupported(OutfitterTarget target) =>
+        target.Job is { } job && AdvisorStatFamilies.Resolve(job.ClassJobId) is not null;
+
+    private static string UnsupportedTargetDiagnostic(OutfitterTarget target) => target.Job is null
+        ? "No job identity is available."
+        : AdvisorStatFamilies.UnsupportedDiagnostic(target.Job.ClassJobId);
+
+    private static int DisciplineOrder(EquipmentDiscipline discipline) => discipline switch
+    {
+        EquipmentDiscipline.Combat => 0,
+        EquipmentDiscipline.Crafter => 1,
+        EquipmentDiscipline.Gatherer => 2,
+        _ => 3,
+    };
+
+    private static string DisciplineLabel(EquipmentDiscipline discipline) => discipline switch
+    {
+        EquipmentDiscipline.Combat => "COMBAT",
+        EquipmentDiscipline.Crafter => "CRAFTERS",
+        EquipmentDiscipline.Gatherer => "GATHERERS",
+        _ => "OTHER",
+    };
+
     private void DrawControls(MinerBotanistAdvisorSessionState state)
     {
-        var hasGathererContext = ContextOrder.Any(candidate => candidate.Id == state.Context.Id);
+        var contextOptions = ContextOptions();
+        var hasMultipleContexts = contextOptions.Count > 1;
 #if DEBUG
         if (s4GoldenFixture is not null)
         {
@@ -267,16 +548,16 @@ internal sealed class MinerBotanistAdvisorPanel
         }
         else
 #endif
-        if (!hasGathererContext)
+        if (!hasMultipleContexts)
         {
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Context · {state.Context.Label}");
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Goal · {context.Label}");
         }
         else
         {
             ImGui.SetNextItemWidth(230f);
-            if (ImGui.BeginCombo("MIN/BTN context##SquireAdvisorContext", ContextLabel(context)))
+            if (ImGui.BeginCombo("Goal##SquireAdvisorContext", ContextLabel(context)))
             {
-                foreach (var candidate in ContextOrder)
+                foreach (var candidate in contextOptions)
                 {
                     if (ImGui.Selectable(ContextLabel(candidate), candidate == context))
                         SetContext(candidate);
@@ -285,7 +566,7 @@ internal sealed class MinerBotanistAdvisorPanel
             }
             var contextMin = ImGui.GetItemRectMin();
             var contextMax = ImGui.GetItemRectMax();
-            foreach (var candidate in ContextOrder)
+            foreach (var candidate in contextOptions)
             {
                 var captured = candidate;
                 reviewRegistry.Register(
@@ -314,25 +595,47 @@ internal sealed class MinerBotanistAdvisorPanel
                 null,
                 session.Cancel);
         }
-        else if (state.Stage != MinerBotanistAdvisorSessionStage.Idle)
+        else
         {
-            var evaluationLabel = state.Advice is null
-                ? "Evaluate gear upgrades##SquireAdvisor"
+            var hasCurrentPlan = selectedTarget is not null &&
+                                 string.Equals(session.AdviceTargetKey, selectedTarget.Key, StringComparison.Ordinal) &&
+                                 state.Advice is not null;
+            var evaluationLabel = !hasCurrentPlan
+                ? "Evaluate gearset##SquireAdvisor"
                 : "Refresh evaluation##SquireAdvisor";
-            if (ImGui.Button(evaluationLabel))
+            var canEvaluate = selectedTarget is not null && IsSupported(selectedTarget);
+            if (!canEvaluate)
+                ImGui.BeginDisabled();
+            if (ImGui.Button(evaluationLabel) && canEvaluate)
                 Begin();
+            if (!canEvaluate)
+                ImGui.EndDisabled();
             RegisterLastControl(
                 "squire.outfitter.advisor.refresh",
-                state.Advice is null
-                    ? "Evaluate gear upgrades from current player equipment and exact-quality evidence"
-                    : "Refresh the current gear-upgrade evaluation",
+                hasCurrentPlan
+                    ? "Refresh the selected saved-gearset evaluation"
+                    : "Evaluate the selected saved gearset with exact-quality evidence",
                 AgentBridgeUiControlKind.Button,
-                true,
+                canEvaluate,
                 false,
                 null,
                 Begin);
         }
 #if DEBUG
+        if (config.EnableMarketAcquisitionDryRunTools)
+        {
+        if (ImGui.SmallButton($"{(showDeveloperReview ? "Hide" : "Show")} developer review##SquireOutfitterDeveloperReview"))
+            showDeveloperReview = !showDeveloperReview;
+        RegisterLastControl(
+            "squire.outfitter.developer-review",
+            $"{(showDeveloperReview ? "Hide" : "Show")} developer review tools",
+            AgentBridgeUiControlKind.Toggle,
+            true,
+            showDeveloperReview,
+            null,
+            () => showDeveloperReview = !showDeveloperReview);
+        if (showDeveloperReview)
+        {
         if (!state.IsBusy && config.EnableMarketAcquisitionDryRunTools)
         {
             ImGui.SameLine();
@@ -393,6 +696,8 @@ internal sealed class MinerBotanistAdvisorPanel
                     ImGui.SameLine();
             }
         }
+        }
+        }
 #endif
     }
 
@@ -404,7 +709,8 @@ internal sealed class MinerBotanistAdvisorPanel
 #endif
         handoffStatus = null;
         var region = resolveRegion();
-        session.Begin(context, string.IsNullOrWhiteSpace(region) ? "North America" : region);
+        if (selectedTarget is not null)
+            session.Begin(selectedTarget, context, string.IsNullOrWhiteSpace(region) ? "North America" : region);
     }
 
     private void SetContext(AdvisorUtilityContextDescriptor value)
@@ -595,7 +901,6 @@ internal sealed class MinerBotanistAdvisorPanel
                 !authority.AdvisorMayConsider)
             .Select(value => value.Candidate.SolutionId)
             .ToHashSet(StringComparer.Ordinal);
-        adjacentTradeoffs = BuildAdjacentTradeoffs(frontierPresentation, selected);
     }
 
     private void DrawDecisionSummary(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
@@ -802,168 +1107,110 @@ internal sealed class MinerBotanistAdvisorPanel
 
     private void DrawSolutionRail(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
     {
-        var selectedIndex = frontierPresentation!.IndexOf(selected.Candidate.SolutionId);
-        var previousId = selectedIndex > 0 ? frontierPresentation.At(selectedIndex - 1).Candidate.SolutionId : null;
-        if (ImGuiUi.Button("< Previous", previousId is not null))
-            SelectSolution(advice, previousId!);
-        RegisterLastControl(
-            "squire.outfitter.advisor.solution.previous",
-            "Select the previous visible frontier solution",
-            AgentBridgeUiControlKind.Button,
-            previousId is not null,
-            false,
-            previousId,
-            () => SelectSolution(advice, previousId!));
-        ImGui.SameLine();
-        var nextId = selectedIndex + 1 < frontierPresentation.Count ? frontierPresentation.At(selectedIndex + 1).Candidate.SolutionId : null;
-        if (ImGuiUi.Button("Next >", nextId is not null))
-            SelectSolution(advice, nextId!);
-        RegisterLastControl(
-            "squire.outfitter.advisor.solution.next",
-            "Select the next visible frontier solution",
-            AgentBridgeUiControlKind.Button,
-            nextId is not null,
-            false,
-            nextId,
-            () => SelectSolution(advice, nextId!));
-        ImGui.SameLine();
-        var previousPageId = frontierWindow!.HasPrevious
-            ? frontierPresentation.At(selectedIndex - AdvisorFrontierPresentation.MaxFrameSolutionCount).Candidate.SolutionId
-            : null;
-        if (ImGuiUi.Button("Page <", previousPageId is not null))
-            SelectSolution(advice, previousPageId!);
-        RegisterLastControl(
-            "squire.outfitter.advisor.solution.previous-page",
-            "Select the solution one frontier page earlier",
-            AgentBridgeUiControlKind.Button,
-            previousPageId is not null,
-            false,
-            previousPageId,
-            () => SelectSolution(advice, previousPageId!));
-        ImGui.SameLine();
-        var nextPageId = frontierWindow.HasNext
-            ? frontierPresentation.At(selectedIndex + AdvisorFrontierPresentation.MaxFrameSolutionCount).Candidate.SolutionId
-            : null;
-        if (ImGuiUi.Button("Page >", nextPageId is not null))
-            SelectSolution(advice, nextPageId!);
-        RegisterLastControl(
-            "squire.outfitter.advisor.solution.next-page",
-            "Select the solution one frontier page later",
-            AgentBridgeUiControlKind.Button,
-            nextPageId is not null,
-            false,
-            nextPageId,
-            () => SelectSolution(advice, nextPageId!));
-        if (advice.Nomination is { } nomination && nomination.Candidate.SolutionId != selected.Candidate.SolutionId)
-        {
-            ImGui.SameLine();
-            if (ImGui.Button("Advisor pick"))
-                SelectSolution(advice, nomination.Candidate.SolutionId);
-            RegisterLastControl(
-                "squire.outfitter.advisor.solution.nomination",
-                "Select the Advisor-nominated frontier solution",
-                AgentBridgeUiControlKind.Button,
-                true,
-                false,
-                nomination.Candidate.SolutionId,
-                () => SelectSolution(advice, nomination.Candidate.SolutionId));
-        }
-        ImGui.SameLine();
-        ImGui.TextDisabled($"{selectedIndex + 1:N0} / {frontierPresentation.Count:N0}");
-        if (!ImGui.BeginTable("##SquireAdvisorRail", 4,
+        var plans = AdvisorComparisonPlanPresentation.Build(frontierPresentation!, advice);
+
+        if (!ImGui.BeginTable("##SquireAdvisorRail", 5,
                 ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingStretchProp,
-                new Vector2(0, Math.Min(150f, 30f + frontierWindow.Solutions.Count * 25f))))
+                new Vector2(0, 28f + plans.Count * 25f)))
             return;
-        ImGui.TableSetupColumn(selected.AcquisitionCostEstimate is null ? "Cost" : "Expected cost", ImGuiTableColumnFlags.WidthFixed, 105f);
+        ImGui.TableSetupColumn("Plan", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn(
+            plans.Any(value => value.Solution.AcquisitionCostEstimate is not null) ? "Expected cost" : "Cost",
+            ImGuiTableColumnFlags.WidthFixed,
+            105f);
         ImGui.TableSetupColumn("Utility", ImGuiTableColumnFlags.WidthFixed, 75f);
-        ImGui.TableSetupColumn("Authority", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Changes", ImGuiTableColumnFlags.WidthFixed, 75f);
         ImGui.TableSetupColumn("Burden", ImGuiTableColumnFlags.WidthFixed, 120f);
-        foreach (var solution in frontierWindow.Solutions)
+        ImGui.TableHeadersRow();
+        foreach (var plan in plans)
         {
+            var solution = plan.Solution;
+            var authority = advice.AuthorityBySolutionId[solution.Candidate.SolutionId];
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
-            if (ImGui.Selectable($"{FormatCost(solution.AcquisitionCostGil)}##{solution.Candidate.SolutionId}",
+            if (!authority.AdvisorMayConsider)
+                ImGui.PushStyleColor(ImGuiCol.Text, MarketMafiosoUiTheme.Warning);
+            else if (advice.Nomination?.Candidate.SolutionId == solution.Candidate.SolutionId)
+                ImGui.PushStyleColor(ImGuiCol.Text, MarketMafiosoUiTheme.Success);
+            if (ImGui.Selectable($"{plan.Label}##{solution.Candidate.SolutionId}",
                     solution.Candidate.SolutionId == selected.Candidate.SolutionId,
                     ImGuiSelectableFlags.SpanAllColumns))
                 SelectSolution(advice, solution.Candidate.SolutionId);
+            var rowHovered = ImGui.IsItemHovered();
+            if (!authority.AdvisorMayConsider || advice.Nomination?.Candidate.SolutionId == solution.Candidate.SolutionId)
+                ImGui.PopStyleColor();
             var capturedSolution = solution;
             RegisterLastControl(
                 $"squire.outfitter.advisor.solution.{solution.Candidate.SolutionId}",
-                $"Select frontier solution costing {FormatCost(solution.AcquisitionCostGil)} with utility {solution.Utility.UtilityScore:N1}",
+                $"Select {plan.Label.ToLowerInvariant()} costing {FormatCost(solution.AcquisitionCostGil)} with utility {solution.Utility.UtilityScore:N1}",
                 AgentBridgeUiControlKind.Select,
                 true,
                 solution.Candidate.SolutionId == selected.Candidate.SolutionId,
                 solution.Candidate.SolutionId,
                 () => SelectSolution(advice, capturedSolution.Candidate.SolutionId));
             ImGui.TableNextColumn();
+            ImGui.TextUnformatted(FormatCost(solution.AcquisitionCostGil));
+            ImGui.TableNextColumn();
             ImGui.TextUnformatted(solution.Utility.UtilityScore.ToString("N1"));
             ImGui.TableNextColumn();
-            var authority = advice.AuthorityBySolutionId[solution.Candidate.SolutionId];
-            ImGui.TextColored(authority.AdvisorMayConsider ? MarketMafiosoUiTheme.Success : MarketMafiosoUiTheme.Warning,
-                authority.AdvisorMayConsider ? "Supported capability" : "Visible, not nominated");
+            var changeCount = CountChangedPositions(advice, solution);
+            ImGui.TextUnformatted($"{changeCount:N0} slot{(changeCount == 1 ? string.Empty : "s")}");
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted($"{solution.Burden.PurchaseTransactions} buy · {solution.Burden.WorldVisits} world");
+            ImGui.TextUnformatted(FormatBurden(solution));
+            if (rowHovered)
+            {
+                ImGui.BeginTooltip();
+                ImGui.TextColored(MarketMafiosoUiTheme.Header,
+                    solution.VariantLabels.FirstOrDefault() ?? plan.Label);
+                ImGui.TextUnformatted(
+                    authority.AdvisorMayConsider ? "Supported capability" : "Visible, not nominated");
+                foreach (var reason in authority.Reasons)
+                    ImGui.TextWrapped(reason);
+                DrawPlanningCost(solution);
+                ImGui.EndTooltip();
+            }
         }
         ImGui.EndTable();
     }
 
-    private void DrawAdjacentTradeoffs(MinerBotanistReadOnlyAdvice advice)
+    private int CountChangedPositions(
+        MinerBotanistReadOnlyAdvice advice,
+        EquipmentDecisionSolution solution)
     {
-        if (adjacentTradeoffs.Count == 0)
-            return;
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "ADJACENT TRADEOFFS");
-        foreach (var value in adjacentTradeoffs)
+        var currentByPosition = session.CurrentBaseline?.EquippedSlots
+            .ToDictionary(value => value.Position)
+            ?? new Dictionary<EquipmentLoadoutPosition, PlayerAdvisorEquippedSlot>();
+        return solution.Candidate.Selections.Count(selection =>
         {
-            if (ImGui.SmallButton($"{value.Label}##{value.Solution.Candidate.SolutionId}"))
-                SelectSolution(advice, value.Solution.Candidate.SolutionId);
-            ImGui.SameLine();
-            ImGui.TextUnformatted($"{FormatSignedGil(value.CostDeltaGil)}, {value.UtilityDelta:+0.0;-0.0;0.0} utility, {value.ChangedPositionCount} slot change(s)");
-        }
+            if (!advice.OffersByAllocation.TryGetValue(selection.AllocationKey, out var offer))
+                return false;
+            currentByPosition.TryGetValue(selection.Position, out var current);
+            return current?.Definition?.ItemId != offer.Offer.Definition.ItemId ||
+                   current?.Quality != offer.Offer.ResolvedQuality;
+        });
     }
 
-    private static IReadOnlyList<AdvisorAdjacentTradeoff> BuildAdjacentTradeoffs(
-        AdvisorFrontierPresentation presentation,
-        EquipmentDecisionSolution selected)
+    private static string FormatBurden(EquipmentDecisionSolution solution)
     {
-        var result = new List<AdvisorAdjacentTradeoff>(2);
-        if (presentation.Previous(selected.Candidate.SolutionId) is { } previous)
-            result.Add(Create(previous.AcquisitionCostGil < selected.AcquisitionCostGil ? "Cheaper" : "Previous variant", previous, selected));
-        if (presentation.Next(selected.Candidate.SolutionId) is { } next)
-            result.Add(Create(
-                next.Utility.UtilityScore > selected.Utility.UtilityScore ? "More capable" :
-                next.AcquisitionCostGil > selected.AcquisitionCostGil ? "Higher-cost tradeoff" : "Next variant",
-                next,
-                selected));
-        return result;
-
-        static AdvisorAdjacentTradeoff Create(
-            string label,
-            EquipmentDecisionSolution adjacent,
-            EquipmentDecisionSolution selected) => new(
-                label,
-                adjacent,
-                checked((long)adjacent.AcquisitionCostGil - (long)selected.AcquisitionCostGil),
-                adjacent.Utility.UtilityScore - selected.Utility.UtilityScore,
-                EquipmentParetoFrontierBuilder.Diff(selected.Candidate, adjacent.Candidate).ChangedPositionCount);
+        if (solution.Burden.PurchaseTransactions == 0 && solution.Burden.WorldVisits == 0)
+            return "No acquisition";
+        return $"{solution.Burden.PurchaseTransactions:N0} buy{(solution.Burden.PurchaseTransactions == 1 ? string.Empty : "s")} · " +
+               $"{solution.Burden.WorldVisits:N0} world";
     }
 
-    private sealed record AdvisorAdjacentTradeoff(
-        string Label,
-        EquipmentDecisionSolution Solution,
-        long CostDeltaGil,
-        double UtilityDelta,
-        int ChangedPositionCount);
-
-    private static void DrawSelectedLoadout(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
+    private void DrawSelectedLoadout(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
     {
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "SELECTED LOADOUT");
-        if (!ImGui.BeginTable("##SquireAdvisorLoadout", 5,
+        var currentByPosition = session.CurrentBaseline?.EquippedSlots
+            .ToDictionary(value => value.Position)
+            ?? new Dictionary<EquipmentLoadoutPosition, PlayerAdvisorEquippedSlot>();
+        if (!ImGui.BeginTable("##SquireAdvisorLoadout", 6,
                 ImGuiTableFlags.RowBg | ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp,
-                new Vector2(0, 265f)))
+                new Vector2(0, 330f)))
             return;
         ImGui.TableSetupColumn("Slot", ImGuiTableColumnFlags.WidthFixed, 90f);
-        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 1.5f);
-        ImGui.TableSetupColumn("Quality", ImGuiTableColumnFlags.WidthFixed, 65f);
+        ImGui.TableSetupColumn("Current", ImGuiTableColumnFlags.WidthStretch, 1.15f);
+        ImGui.TableSetupColumn("Planned", ImGuiTableColumnFlags.WidthStretch, 1.15f);
+        ImGui.TableSetupColumn("Δ", ImGuiTableColumnFlags.WidthFixed, 55f);
         ImGui.TableSetupColumn("Source", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableSetupColumn(selected.AcquisitionCostEstimate is null ? "Cost" : "Expected cost", ImGuiTableColumnFlags.WidthFixed, 95f);
         ImGui.TableHeadersRow();
@@ -971,11 +1218,20 @@ internal sealed class MinerBotanistAdvisorPanel
         {
             if (!advice.OffersByAllocation.TryGetValue(selection.AllocationKey, out var offer))
                 continue;
+            currentByPosition.TryGetValue(selection.Position, out var current);
+            var changed = current?.Definition?.ItemId != offer.Offer.Definition.ItemId ||
+                          current?.Quality != offer.Offer.ResolvedQuality;
             ImGui.TableNextRow();
-            Cell(selection.Position.ToString());
-            Cell(offer.Offer.Definition.Name);
-            Cell(selection.OfferKey.Quality == EquipmentQuality.High ? "HQ" : "NQ");
-            Cell(offer.Offer.SourceLabel);
+            Cell(FormatPosition(selection.Position));
+            Cell(FormatCurrentItem(current));
+            ImGui.TableNextColumn();
+            ImGui.TextColored(changed ? MarketMafiosoUiTheme.Header : MarketMafiosoUiTheme.Muted,
+                $"{offer.Offer.Definition.Name}{(offer.Offer.ResolvedQuality == EquipmentQuality.High ? " HQ" : string.Empty)}");
+            Cell(FormatItemLevelDelta(current?.Definition?.ItemLevel, offer.Offer.Definition.ItemLevel));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(FormatSource(offer));
+            if (ImGui.IsItemHovered() && !string.Equals(FormatSource(offer), offer.Offer.SourceLabel, StringComparison.Ordinal))
+                ImGui.SetTooltip(offer.Offer.SourceLabel);
             Cell(offer.AcquisitionCostGil == 0 ? "—" : $"{offer.AcquisitionCostGil:N0}");
         }
         ImGui.EndTable();
@@ -1014,12 +1270,15 @@ internal sealed class MinerBotanistAdvisorPanel
             craftHandoff = projectedCraft;
         if (acquisitions.Length == 0)
         {
+            var ownedChangeCount = CountChangedPositions(advice, selected);
             ImGui.TextColored(MarketMafiosoUiTheme.Success,
-                "No acquisition needed; current equipped items remain the selected loadout.");
+                ownedChangeCount == 0
+                    ? "No acquisition needed; current gear remains the selected loadout."
+                    : $"No acquisition needed; the {ownedChangeCount:N0} selected change{(ownedChangeCount == 1 ? string.Empty : "s")} use gear you already own.");
             return;
         }
-        foreach (var offer in acquisitions)
-            ImGui.BulletText($"{offer.Offer.Definition.Name} {FormatQuality(offer.Offer.ResolvedQuality)} · {offer.Offer.SourceLabel} · {offer.AcquisitionCostGil:N0} gil");
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted,
+            $"Acquisition: {acquisitions.Length:N0} item{(acquisitions.Length == 1 ? string.Empty : "s")} · {FormatCost(selected.AcquisitionCostGil)}");
         if (containsCraft)
             DrawCraftHandoffReview(craftHandoff, acquisitions);
         var canCopyArtisan = containsCraft && craftHandoff is not null &&
@@ -1207,8 +1466,8 @@ internal sealed class MinerBotanistAdvisorPanel
             }
         }
         var workbenchLabel = containsCraft
-            ? $"Get {craftHandoff?.MarketMaterials.Count ?? 0:N0} materials"
-            : "Get these upgrades";
+            ? $"Stage {craftHandoff?.MarketMaterials.Count ?? 0:N0} materials"
+            : $"Stage {acquisitions.Length:N0} acquisition{(acquisitions.Length == 1 ? string.Empty : "s")}";
         if (containsCraft)
             ImGui.SameLine();
         if (ImGuiUi.PrimaryButton(workbenchLabel, canStage))
@@ -1339,23 +1598,14 @@ internal sealed class MinerBotanistAdvisorPanel
 
     private void DrawEmptyState(MinerBotanistAdvisorSessionState state)
     {
-        if (state.Stage == MinerBotanistAdvisorSessionStage.Idle)
+        if (state.Stage is MinerBotanistAdvisorSessionStage.Idle or
+            MinerBotanistAdvisorSessionStage.Complete or
+            MinerBotanistAdvisorSessionStage.Cancelled)
         {
             ImGui.Dummy(new Vector2(0, 34f));
-            ImGui.TextColored(MarketMafiosoUiTheme.Header, "Find your next gear upgrades");
-            ImGui.TextWrapped("Squire compares your equipped MIN and BTN gear with items you own, vendor stock, crafting options, and current market listings.");
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Nothing is purchased or equipped unless you explicitly continue with an upgrade list.");
-            ImGui.Spacing();
-            if (ImGuiUi.PrimaryButton("Evaluate my gear", true))
-                Begin();
-            RegisterLastControl(
-                "squire.outfitter.advisor.refresh",
-                "Evaluate gear upgrades from the active player's equipment",
-                AgentBridgeUiControlKind.Button,
-                true,
-                false,
-                null,
-                Begin);
+            ImGui.TextColored(MarketMafiosoUiTheme.Header, "Evaluate the selected gearset");
+            ImGui.TextWrapped("Squire will compare this saved gearset with owned, vendor, crafted, and current market options, then place the complete recommended loadout here.");
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Selection is read-only until you explicitly stage the resulting acquisitions.");
         }
         else if (state.Stage is MinerBotanistAdvisorSessionStage.Abstained or MinerBotanistAdvisorSessionStage.Failed)
             ImGui.TextWrapped("No recommendation was produced. The incomplete evidence remains visible above instead of being replaced by a guess.");
@@ -1363,7 +1613,7 @@ internal sealed class MinerBotanistAdvisorPanel
 
     private static string FriendlyProgressMessage(MinerBotanistAdvisorSessionStage stage) => stage switch
     {
-        MinerBotanistAdvisorSessionStage.CapturingPlayer => "Reading your current MIN and BTN equipment…",
+        MinerBotanistAdvisorSessionStage.CapturingPlayer => "Reading the selected saved gearset…",
         MinerBotanistAdvisorSessionStage.DiscoveringMarket => "Comparing owned, vendor, crafted, and market options…",
         _ => "Evaluating gear upgrades…",
     };
@@ -1393,13 +1643,37 @@ internal sealed class MinerBotanistAdvisorPanel
     };
 
     private static string FormatCost(ulong value) => value == 0 ? "No gil" : $"{value:N0} gil";
-    private static string FormatSignedGil(long value) => value switch
-    {
-        > 0 => $"+{value:N0} gil",
-        < 0 => $"-{Math.Abs(value):N0} gil",
-        _ => "same cost",
-    };
     private static string FormatQuality(EquipmentQuality value) => value == EquipmentQuality.High ? "HQ" : "NQ";
+
+    private static string FormatSource(EquipmentExactSolverOffer offer) => offer.Offer.SourceKind switch
+    {
+        EquipmentAcquisitionSourceKind.Owned => "Owned",
+        EquipmentAcquisitionSourceKind.MarketBoard => "Market board",
+        EquipmentAcquisitionSourceKind.GilVendor => "Vendor",
+        EquipmentAcquisitionSourceKind.Craft => "Craft",
+        _ => offer.Offer.SourceLabel,
+    };
+
+    private static string FormatCurrentItem(PlayerAdvisorEquippedSlot? current) => current?.Definition is not { } definition
+        ? "—"
+        : $"{definition.Name}{(current.Quality == EquipmentQuality.High ? " HQ" : string.Empty)}";
+
+    private static string FormatItemLevelDelta(uint? currentItemLevel, uint plannedItemLevel)
+    {
+        if (currentItemLevel is null)
+            return plannedItemLevel == 0 ? "—" : $"i{plannedItemLevel:N0}";
+        var delta = (long)plannedItemLevel - currentItemLevel.Value;
+        return delta == 0 ? "—" : $"{delta:+#;-#;0}";
+    }
+
+    private static string FormatPosition(EquipmentLoadoutPosition value) => value switch
+    {
+        EquipmentLoadoutPosition.MainHand => "Main hand",
+        EquipmentLoadoutPosition.OffHand => "Off hand",
+        EquipmentLoadoutPosition.LeftRing => "Ring 1",
+        EquipmentLoadoutPosition.RightRing => "Ring 2",
+        _ => value.ToString(),
+    };
 
     private static void DrawPlanningCost(EquipmentDecisionSolution solution)
     {
@@ -1470,7 +1744,13 @@ internal sealed class MinerBotanistAdvisorPanel
 
     private enum AdvisorFrontierView
     {
-        Solutions,
-        Plot,
+        List,
+        Chart,
+    }
+
+    private enum OutfitterTargetView
+    {
+        Jobs,
+        Retainers,
     }
 }

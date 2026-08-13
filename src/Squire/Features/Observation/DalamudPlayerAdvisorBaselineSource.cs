@@ -200,7 +200,10 @@ public sealed unsafe class DalamudPlayerAdvisorBaselineSource : IOutfitterTarget
                         checkPvPItemFlag: false);
                     if (value > int.MaxValue)
                     {
-                        if (definition is null || AdvisorEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(definition) ||
+                        // The active equipped slot itself proves that this character satisfies any
+                        // race/sex/company/PvP equip restriction. Keep rejecting unmodeled stat
+                        // effects, but do not let a satisfied restriction erase an exact static zero.
+                        if (definition is null || AdvisorEquipmentSupportPolicy.HasUnmodeledEffect(definition) ||
                             !TryGetStaticUnmeldedContribution(
                                 definitionProfile,
                                 semantic,

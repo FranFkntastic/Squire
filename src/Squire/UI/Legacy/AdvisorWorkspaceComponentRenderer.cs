@@ -32,6 +32,8 @@ internal static class AdvisorWorkspaceComponentRenderer
             Tone(presentation.SessionTone));
         if (!string.IsNullOrWhiteSpace(presentation.SessionMessage))
             ImGui.TextWrapped(presentation.SessionMessage);
+        if (state.Stage == MinerBotanistAdvisorSessionStage.Complete && !string.IsNullOrWhiteSpace(state.CoverageLabel))
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, state.CoverageLabel);
         if (!presentation.ShowProgress)
             return;
 

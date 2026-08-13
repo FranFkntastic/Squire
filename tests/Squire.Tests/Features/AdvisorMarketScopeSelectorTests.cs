@@ -29,7 +29,7 @@ public sealed class AdvisorMarketScopeSelectorTests
         foreach (var slot in slots)
         {
             var selectedForSlot = selected.Count(itemId => definitions[itemId].Slot == slot);
-            Assert.True(selectedForSlot >= 6, $"Expected at least six {slot} candidates, found {selectedForSlot}.");
+            Assert.True(selectedForSlot >= 3, $"Expected at least three {slot} candidates, found {selectedForSlot}.");
             Assert.Contains(definitions.Values.Single(value => value.Slot == slot && value.ItemLevel == 12).ItemId, selected);
         }
     }

@@ -303,7 +303,8 @@ public sealed class MinerBotanistReadOnlyAdvisor
                 offers,
                 required,
                 baselineKeys,
-                profile);
+                profile,
+                MaxRetainedRepresentatives: 1);
             var replay = family.CaptureReplay(
                 request,
                 contextId,
@@ -381,8 +382,8 @@ public sealed class MinerBotanistReadOnlyAdvisor
             authority,
             offers.ToDictionary(value => value.AllocationKey),
             nomination is null
-                ? "Frontier is complete, but the advisor abstains under the displayed rule."
-                : $"Advisor nominates {nomination.Candidate.SolutionId} under the displayed rule.")
+                ? "The comparison is complete, but none of the options meets the no-loss upgrade rule."
+                : "Upgrade options are ready. The recommendation is the least expensive no-loss improvement found.")
         {
             CraftOffersByAllocation = craftOffersByAllocation,
         };

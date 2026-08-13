@@ -508,22 +508,18 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 
         ownedInventoryCoverageComplete = ComponentIsComplete(baseline, "armoury") && ComponentIsComplete(baseline, "inventory");
         ownedItemsEvidence = CaptureOwnedItems(baseline);
-        var ownershipCoverage = ownedInventoryCoverageComplete
-            ? "owned armoury, bag, and saddlebag inventory observed via direct container reads (unmelded items use exact NQ/HQ definitions; relevant melded items block paid nomination)"
-            : "owned inventory coverage is partial; observed unmelded items use exact NQ/HQ definitions, but paid nomination is disabled";
-        var coverageLabel = offers.CoverageLabel.Replace(
-            "owned inventory is not yet observed",
-            ownershipCoverage,
-            StringComparison.Ordinal);
+        var coverageLabel = ownedInventoryCoverageComplete
+            ? "All currently equipped, armoury, bag, saddlebag, and gil-vendor options are included."
+            : "Observed owned and gil-vendor options are included; paid recommendations stay disabled while owned inventory is incomplete.";
         var marketScope = AdvisorMarketScopeSelector.Select(offers);
         var sampledMarket = marketScope.Count < offers.MarketItemIds.Count;
         var marketQueryScope = ResolveMarketQueryScope(baseline, Region);
         if (sampledMarket)
         {
             coverageLabel +=
-                $" Market discovery samples {marketScope.Count:N0} of {offers.MarketItemIds.Count:N0} eligible items, prioritizing the highest-level options across every equipment slot; owned and gil-vendor options remain complete.";
+                $" Market comparison samples {marketScope.Count:N0} of {offers.MarketItemIds.Count:N0} eligible items across every equipment slot.";
         }
-        coverageLabel += $" Market prices are scoped to {marketQueryScope}; the acquisition region remains {Region}.";
+        coverageLabel += $" Prices are from {marketQueryScope}.";
         discoveryRequest = new(
             "universalis",
             Region,
@@ -796,8 +792,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         pendingSolvingEvidence = null;
         State = State with
         {
-            Message = $"{craftDiagnostic} Solving the exact frontier off the framework tick. Cancel remains available.",
-            CoverageLabel = $"{State.CoverageLabel} {craftDiagnostic}",
+            Message = "Comparing complete loadouts. Cancel remains available.",
             Completed = craftOffers.Count,
             Total = craftOffers.Count,
             UpdatedAtUtc = DateTimeOffset.UtcNow,
@@ -844,7 +839,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             CurrentEvidence = pendingCurrentEvidence;
             adviceTargetKey = requestedTarget?.Key ?? "active-loadout";
         }
-        var craftDiagnostic = pendingCraftDiagnostic;
+        var craftDiagnostic = UserFacingCraftDiagnostic(pendingCraftDiagnostic);
         State = State with
         {
             Stage = stage,
@@ -861,6 +856,12 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         Volatile.Write(ref solverProgress, null);
         DisposeCancellation();
     }
+
+    private static string UserFacingCraftDiagnostic(string? diagnostic) =>
+        string.IsNullOrWhiteSpace(diagnostic) ||
+        diagnostic.StartsWith("Craft preparation: 0 exact graph(s) prepared from 0/0 eligible catalog items;", StringComparison.Ordinal)
+            ? string.Empty
+            : diagnostic;
 
     private void CompleteWorkbenchValidation(WorkbenchValidationRequest request)
     {

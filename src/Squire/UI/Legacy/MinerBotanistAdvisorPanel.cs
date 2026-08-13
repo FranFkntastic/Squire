@@ -227,7 +227,7 @@ internal sealed class MinerBotanistAdvisorPanel
 
     private void DrawFrontierComponent(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
     {
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "COMPARE OPTIONS");
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "OTHER GOOD OPTIONS");
         ImGui.SameLine();
         DrawFrontierViewButton("List", AdvisorFrontierView.Solutions);
         ImGui.SameLine();
@@ -678,7 +678,7 @@ internal sealed class MinerBotanistAdvisorPanel
         SummaryCell("Goal", ProfileContextLabel(selected.Utility), MarketMafiosoUiTheme.Header);
         SummaryCell("Recommended", advice.Nomination is null ? "No recommendation" : FormatCost(advice.Nomination.AcquisitionCostGil),
             advice.Nomination is null ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Success);
-        SummaryCell(selected.AcquisitionCostEstimate is null ? "Selected" : "Selected expected", FormatCost(selected.AcquisitionCostGil), MarketMafiosoUiTheme.Link);
+        SummaryCell(selected.AcquisitionCostEstimate is null ? "This option" : "This option expected", FormatCost(selected.AcquisitionCostGil), MarketMafiosoUiTheme.Link);
         if (selected.AcquisitionCostEstimate is { } estimate)
             SummaryCell($"Selected {estimate.PlanningConfidence:P0} plan", FormatCost(estimate.PlanningCostGil), MarketMafiosoUiTheme.Warning);
         SummaryCell("Improvement", FormatUtilityGain(advice, selected), MarketMafiosoUiTheme.Success);

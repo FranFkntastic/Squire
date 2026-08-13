@@ -39,12 +39,39 @@ public sealed class SquireSettingsStateTests
         var reevaluations = 0;
         var state = new SquireSettingsState(configuration, () => reevaluations++, () => false, _ => { });
 
-        state.UpdatePolicy(settings => settings.ProtectBlueAndPurpleGear = false);
+        state.UpdatePolicy(settings => settings.ProtectPlayerSignedGear = true);
 
-        Assert.False(configuration.Squire.ProtectBlueAndPurpleGear);
-        Assert.False(new SquireRuleStore(configuration).CreatePolicy(null).ProtectBlueAndPurpleGear);
+        Assert.True(configuration.Squire.ProtectPlayerSignedGear);
+        Assert.True((new SquireCleanupRuleStore(configuration).CreatePolicy(null).CleanupRules ?? [])
+            .Single(rule => rule.Id == "builtin.protect-player-signed").Enabled);
         Assert.Equal(1, configuration.SaveCount);
         Assert.Equal(1, reevaluations);
+    }
+
+    [Fact]
+    public void PolicyWriteProjectsEverySettingsProtectionIntoCleanupRules()
+    {
+        var configuration = new TestConfiguration();
+        var state = new SquireSettingsState(configuration, () => { }, () => false, _ => { });
+
+        state.UpdatePolicy(settings =>
+        {
+            settings.ProtectBlueAndPurpleGear = false;
+            settings.ProtectPlayerSignedGear = true;
+            settings.ProtectFutureLevelingGearOptIn = true;
+            settings.ProtectArmoireEligible = false;
+            settings.ProtectMateria = true;
+            settings.AllowRiskyMateriaRetrieval = false;
+        });
+
+        var rules = (new SquireCleanupRuleStore(configuration).CreatePolicy(null).CleanupRules ?? [])
+            .ToDictionary(rule => rule.Id, StringComparer.Ordinal);
+        Assert.False(rules["builtin.protect-high-rarity"].Enabled);
+        Assert.True(rules["builtin.protect-player-signed"].Enabled);
+        Assert.True(rules["builtin.protect-future-leveling"].Enabled);
+        Assert.False(rules["builtin.protect-armoire"].Enabled);
+        Assert.True(rules["builtin.protect-materia-risk"].Enabled);
+        Assert.Equal(1, configuration.SaveCount);
     }
 
     [Fact]

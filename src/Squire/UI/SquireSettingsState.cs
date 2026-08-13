@@ -133,6 +133,7 @@ internal sealed class SquireSettingsState
     {
         ArgumentNullException.ThrowIfNull(update);
         update(configuration.Squire);
+        SquireCleanupPolicyProjection.Synchronize(configuration.Squire);
         configuration.Save();
         requestPolicyReevaluation();
     }

@@ -302,11 +302,7 @@ public static class SquireCleanupRuleMigration
         if (squire.RuleSchemaVersion >= 2 && !hadLegacyRules)
             return false;
 
-        SetEnabled(squire, "builtin.protect-high-rarity", squire.ProtectBlueAndPurpleGear);
-        SetEnabled(squire, "builtin.protect-player-signed", squire.ProtectPlayerSignedGear);
-        SetEnabled(squire, "builtin.protect-future-leveling", squire.ProtectFutureLevelingGearOptIn);
-        SetEnabled(squire, "builtin.protect-armoire", squire.ProtectArmoireEligible);
-        SetEnabled(squire, "builtin.protect-materia-risk", squire.ProtectMateria && !squire.AllowRiskyMateriaRetrieval);
+        SquireCleanupPolicyProjection.Synchronize(squire);
 
 #pragma warning disable CS0618
         foreach (var pair in squire.RulesByCharacter)
@@ -373,6 +369,21 @@ public static class SquireCleanupRuleMigration
 #pragma warning restore CS0618
         squire.RuleSchemaVersion = 2;
         return true;
+    }
+
+}
+
+internal static class SquireCleanupPolicyProjection
+{
+    public static void Synchronize(SquireConfiguration config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        config.BuiltInRuleOverrides ??= new();
+        SetEnabled(config, "builtin.protect-high-rarity", config.ProtectBlueAndPurpleGear);
+        SetEnabled(config, "builtin.protect-player-signed", config.ProtectPlayerSignedGear);
+        SetEnabled(config, "builtin.protect-future-leveling", config.ProtectFutureLevelingGearOptIn);
+        SetEnabled(config, "builtin.protect-armoire", config.ProtectArmoireEligible);
+        SetEnabled(config, "builtin.protect-materia-risk", config.ProtectMateria && !config.AllowRiskyMateriaRetrieval);
     }
 
     private static void SetEnabled(SquireConfiguration config, string id, bool enabled)

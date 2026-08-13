@@ -3,6 +3,7 @@ using Dalamud.Interface.Windowing;
 using Squire.Persistence;
 using System.Numerics;
 using MarketMafioso.Windows.Squire;
+using Franthropy.Dalamud.UI.Styling;
 
 namespace Squire.UI;
 
@@ -45,12 +46,21 @@ internal sealed class SquireWindow : Window
     private void DrawMigrationRecovery()
     {
         ImGui.Separator();
-        ImGui.TextColored(new Vector4(0.88f, 0.69f, 0.35f, 1f), "Previous Squire settings are available");
-        ImGui.TextWrapped(migration.Message);
-        if (ImGui.Button("Import previous settings"))
-        {
-            migration = importer.Import();
-            save();
-        }
+        DalamudUiChrome.DrawCallout(
+            "SquireLegacyImport",
+            "Previous Squire settings are available",
+            migration.Message,
+            SquireUiTheme.Current,
+            DalamudUiTone.Warning,
+            () =>
+            {
+                if (!DalamudUiControls.Button(
+                        "Import previous settings",
+                        SquireUiTheme.Current,
+                        DalamudUiTone.Warning))
+                    return;
+                migration = importer.Import();
+                save();
+            });
     }
 }

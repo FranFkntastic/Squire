@@ -18,6 +18,8 @@ using Newtonsoft.Json;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Equipment;
 using Franthropy.Dalamud.UI.Tables;
+using Franthropy.Dalamud.UI.Styling;
+using Squire.UI;
 using MarketMafioso.Diagnostics;
 using MarketMafioso.Squire.Outfitter.Utility;
 using MarketMafioso.Squire.Outfitter.Acquisition;
@@ -187,7 +189,11 @@ internal sealed class SquireTabPanel : IDisposable
     private void DrawWorkspaceButton(string workspace, string visibleLabel, string reviewLabel)
     {
         var selected = selectedWorkspace == workspace;
-        if (ImGui.Selectable($"{visibleLabel}##SquireWorkspace{workspace}", selected, ImGuiSelectableFlags.None, new(112f, 0)))
+        if (DalamudUiControls.SegmentedOption(
+                $"{visibleLabel}##SquireWorkspace{workspace}",
+                selected,
+                SquireUiTheme.Current,
+                new(112f, 0)))
             SelectWorkspace(workspace);
         RegisterLastControl(
             $"squire.workspace.{workspace.ToLowerInvariant()}",
@@ -213,13 +219,24 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void DrawCleanup()
     {
-        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Squire — cleanup selection");
+        DalamudUiChrome.DrawSectionHeading(
+            "Squire — cleanup selection",
+            null,
+            SquireUiTheme.Current.Palette);
         ImGui.TextWrapped("Squire keeps its equipment analysis current automatically. Cleanup happens only through an explicitly selected and confirmed batch.");
-        if (ImGui.Button("Refresh##Squire"))
+        if (DalamudUiControls.Button(
+                "Refresh##Squire",
+                SquireUiTheme.Current,
+                DalamudUiTone.Accent))
             Refresh();
         RegisterLastControl("squire.refresh", "Refresh Squire analysis", AgentBridgeUiControlKind.Button, true, false, null, Refresh);
         ImGui.SameLine();
-        if (analysis is not null && ImGui.Button("Export evaluation snapshot##Squire"))
+        if (DalamudUiControls.Button(
+                "Export evaluation snapshot##Squire",
+                SquireUiTheme.Current,
+                DalamudUiTone.Neutral,
+                quiet: true,
+                enabled: analysis is not null))
             Export();
         RegisterLastControl("squire.export", "Export Squire evaluation snapshot", AgentBridgeUiControlKind.Button, analysis is not null, false, null, Export);
         ImGui.SameLine();

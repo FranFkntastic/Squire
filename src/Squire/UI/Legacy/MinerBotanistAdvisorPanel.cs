@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Franthropy.Dalamud.AgentBridge;
@@ -686,7 +687,12 @@ internal sealed class MinerBotanistAdvisorPanel
             advice.Nomination?.Candidate.SolutionId,
             frontierWarningIds,
             new HashSet<string>(StringComparer.Ordinal));
-        var result = plotContainer.Draw("SquireAdvisorFrontier", model.Spec, new Vector2(0, 285f), interaction);
+        var result = plotContainer.Draw(
+            "SquireAdvisorFrontier",
+            BuildPlotRenderRevision(model.Spec, interaction),
+            model.Spec,
+            new Vector2(0, 285f),
+            interaction);
         RegisterPlotControls(result.Controls);
         if (result.ClickedDatumId is { } clicked && model.SolutionsByDatumId.ContainsKey(clicked))
             SelectSolution(advice, clicked);
@@ -739,7 +745,12 @@ internal sealed class MinerBotanistAdvisorPanel
             new HashSet<string>(StringComparer.Ordinal));
 
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Shape identifies context · point color remains NQ/HQ mix");
-        var result = plotContainer.Draw("SquireAdvisorFrontierOverlay", overlay.Spec, new Vector2(0, 285f), interaction);
+        var result = plotContainer.Draw(
+            "SquireAdvisorFrontierOverlay",
+            BuildPlotRenderRevision(overlay.Spec, interaction),
+            overlay.Spec,
+            new Vector2(0, 285f),
+            interaction);
         RegisterPlotControls(result.Controls);
         if (result.ClickedDatumId is { } clicked && overlay.DatumIdentities.TryGetValue(clicked, out var clickedIdentity))
         {
@@ -1449,6 +1460,20 @@ internal sealed class MinerBotanistAdvisorPanel
             selected,
             value,
             invoke);
+    }
+
+    private static long BuildPlotRenderRevision(PlotSpec spec, PlotInteractionState interaction)
+    {
+        var hash = new HashCode();
+        hash.Add(RuntimeHelpers.GetHashCode(spec));
+        hash.Add(interaction.NominatedDatumId, StringComparer.Ordinal);
+        foreach (var id in interaction.SelectedDatumIds.Order(StringComparer.Ordinal))
+            hash.Add(id, StringComparer.Ordinal);
+        foreach (var id in interaction.WarningDatumIds.Order(StringComparer.Ordinal))
+            hash.Add(id, StringComparer.Ordinal);
+        foreach (var id in interaction.FailureDatumIds.Order(StringComparer.Ordinal))
+            hash.Add(id, StringComparer.Ordinal);
+        return hash.ToHashCode();
     }
 
     private void RegisterPlotControls(IReadOnlyList<DalamudPlotContainerControl> controls)

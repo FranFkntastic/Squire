@@ -348,6 +348,21 @@ public sealed class OutfitterMarketEvidenceDiscoveryServiceTests
     }
 
     [Fact]
+    public async Task Conflicting_bulk_member_falls_back_individually_without_poisoning_the_generation()
+    {
+        var source = new RecoveringBulkListingSource();
+        var service = new OutfitterMarketEvidenceDiscoveryService(source, Cache(), utcNow: () => Now);
+
+        var result = await service.DiscoverAsync(Request([10, 11]), CancellationToken.None);
+
+        Assert.Equal([10u], source.SingleRequests);
+        Assert.Equal(OutfitterMarketEvidenceGenerationStatus.Complete, result.WorkingBook.Status);
+        Assert.All(result.WorkingBook.Items, item => Assert.Equal(OutfitterMarketEvidenceItemStatus.Fresh, item.Status));
+        Assert.Equal("single-10", Assert.Single(result.WorkingBook.Items.Single(item => item.ItemId == 10).Listings).ListingId);
+        Assert.Equal("bulk-11", Assert.Single(result.WorkingBook.Items.Single(item => item.ItemId == 11).Listings).ListingId);
+    }
+
+    [Fact]
     public async Task Explicit_sample_ids_drive_sampled_generation()
     {
         var source = new StubBulkListingSource();
@@ -494,6 +509,45 @@ public sealed class OutfitterMarketEvidenceDiscoveryServiceTests
         {
             SingleRequests.Add(itemId);
             return Task.FromResult<IReadOnlyList<MarketAcquisitionListing>>([]);
+        }
+
+        public Task<IReadOnlyList<MarketAcquisitionListing>> FetchListingsForWorldAsync(
+            string worldName,
+            uint itemId,
+            int listingLimit,
+            CancellationToken cancellationToken) =>
+            FetchListingsAsync(worldName, itemId, listingLimit, cancellationToken);
+    }
+
+    private sealed class RecoveringBulkListingSource : IMarketAcquisitionBulkListingSource
+    {
+        public List<uint> SingleRequests { get; } = [];
+
+        public Task<MarketAcquisitionBulkListingResult> FetchListingsBulkAsync(
+            string region,
+            IReadOnlyCollection<uint> itemIds,
+            int listingLimit,
+            CancellationToken cancellationToken)
+        {
+            var first = Listing(10, "collision", false, 100);
+            return Task.FromResult(new MarketAcquisitionBulkListingResult(
+                new Dictionary<uint, IReadOnlyList<MarketAcquisitionListing>>
+                {
+                    [10] = [first, first with { UnitPrice = 101 }],
+                    [11] = [Listing(11, "bulk-11", false, 110)],
+                },
+                new Dictionary<uint, string>()));
+        }
+
+        public Task<IReadOnlyList<MarketAcquisitionListing>> FetchListingsAsync(
+            string region,
+            uint itemId,
+            int listingLimit,
+            CancellationToken cancellationToken)
+        {
+            SingleRequests.Add(itemId);
+            return Task.FromResult<IReadOnlyList<MarketAcquisitionListing>>(
+                [Listing(itemId, $"single-{itemId}", false, 105)]);
         }
 
         public Task<IReadOnlyList<MarketAcquisitionListing>> FetchListingsForWorldAsync(

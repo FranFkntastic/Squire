@@ -156,7 +156,24 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
                     {
                         cancellationToken.ThrowIfCancellationRequested();
                         if (bulk.ListingsByItemId.TryGetValue(target.ItemId, out var listings))
-                            StoreListings(target, visible, listings);
+                        {
+                            try
+                            {
+                                StoreListings(target, visible, listings);
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                throw;
+                            }
+                            catch
+                            {
+                                // Universalis' multi-item endpoint can transiently return conflicting
+                                // rows for one item. Re-read only that item through the independent
+                                // single-item contract so one corrupt batch member cannot poison the
+                                // rest of an otherwise coherent generation.
+                                await FetchOneAsync(request, target, visible, cancellationToken).ConfigureAwait(false);
+                            }
+                        }
                         else
                             StoreFailure(target, visible, bulk.FailuresByItemId.GetValueOrDefault(target.ItemId) ??
                                 "Bulk market evidence omitted the requested item.");

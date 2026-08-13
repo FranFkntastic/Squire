@@ -343,15 +343,29 @@ internal sealed class SquireTabPanel : IDisposable
         using (ImRaii.PushStyle(ImGuiStyleVar.FramePadding, new System.Numerics.Vector2(toolbarStyle.FramePadding.X, toolbarPaddingY)))
         {
             if (ImGui.InputTextWithHint("##SquireSearch", "Search or filter, e.g. quality:hq", ref editedSearch, 160))
-            {
-                ActiveCleanupWorkbench.Search = editedSearch;
-                if (!IsCleanupSyntheticReviewActive)
-                {
-                    config.Squire.Search = editedSearch;
-                    config.Save();
-                }
-            }
+                ApplyCleanupFilterExpression(editedSearch);
         }
+        reviewRegistry.RegisterLastAction(
+            SquireCleanupToolbarPresentation.FilterControlId,
+            "Filter Cleanup candidates",
+            AgentBridgeUiControlKind.Input,
+            true,
+            false,
+            ActiveCleanupWorkbench.Search,
+            new AgentBridgeActionArgumentSchema(
+                [new("expression", AgentBridgeActionArgumentKind.String, Required: false)]),
+            arguments =>
+            {
+                var expression = arguments is { ValueKind: System.Text.Json.JsonValueKind.Object } value &&
+                                 value.TryGetProperty("expression", out var expressionValue)
+                    ? expressionValue.GetString()
+                    : string.Empty;
+                ApplyCleanupFilterExpression(expression);
+                return AgentBridgeUiActionResult.Ok(
+                    ActiveCleanupWorkbench.Filter.IsValid
+                        ? "Cleanup filter updated."
+                        : "Cleanup filter updated; the last valid results remain visible.");
+            });
         var editedShowProtected = ActiveCleanupWorkbench.ShowProtected;
         ImGui.SameLine();
         if (ImGui.Checkbox("Show protected", ref editedShowProtected))
@@ -463,6 +477,18 @@ internal sealed class SquireTabPanel : IDisposable
     }
 
     private void Refresh() => Refresh(reconcileSelections: analysis is not null, "Manual refresh");
+
+    private void ApplyCleanupFilterExpression(string? expression) =>
+        SquireCleanupFilterEdit.Apply(
+            ActiveCleanupWorkbench,
+            expression,
+            IsCleanupSyntheticReviewActive
+                ? null
+                : value =>
+                {
+                    config.Squire.Search = value;
+                    config.Save();
+                });
 
     private void MaybeRefreshAutomatically()
     {

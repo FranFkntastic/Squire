@@ -9,6 +9,7 @@ public sealed class SquireCleanupPresentationStateTests
     public void Cleanup_toolbar_has_persistent_label_stable_control_and_minimum_target_height()
     {
         Assert.Equal("Filter candidates", SquireCleanupToolbarPresentation.FilterLabel);
+        Assert.Equal("squire.cleanup.filter", SquireCleanupToolbarPresentation.FilterControlId);
         Assert.Equal("Columns", SquireCleanupToolbarPresentation.ColumnsLabel);
         Assert.Equal("squire.cleanup.columns", SquireCleanupToolbarPresentation.ColumnsControlId);
 
@@ -16,6 +17,43 @@ public sealed class SquireCleanupPresentationStateTests
         Assert.True(13f + (paddingY * 2f) >= SquireCleanupToolbarPresentation.MinimumControlHeight);
         Assert.Equal(24f, SquireCleanupToolbarPresentation.ResolveControlHeight(currentFrameHeight: 22f));
         Assert.Equal(31f, SquireCleanupToolbarPresentation.ResolveControlHeight(currentFrameHeight: 31f));
+    }
+
+    [Fact]
+    public void Reviewed_filter_edit_uses_the_existing_filter_without_changing_selection_or_run_authority()
+    {
+        var persisted = string.Empty;
+        var workbench = new SquireCleanupWorkbenchState("quality:nq", showProtected: false, showNonEquipment: false)
+        {
+            SelectionMode = true,
+        };
+        var runBefore = SquireCleanupRunAuthorization.Resolve(
+            deterministicReviewActive: false,
+            snapshotComplete: true,
+            selectionCount: 1,
+            supportedBatch: true,
+            hiddenSelectionCount: 0,
+            validationSucceeded: true,
+            running: false);
+
+        SquireCleanupFilterEdit.Apply(workbench, "name:copper", value => persisted = value);
+
+        Assert.Equal("name:copper", workbench.Search);
+        Assert.Equal("name:copper", persisted);
+        Assert.True(workbench.Filter.IsValid);
+        Assert.True(workbench.SelectionMode);
+        Assert.Empty(workbench.Review.Selections);
+        Assert.Empty(workbench.TableSelection.SelectedKeys);
+        Assert.Equal(
+            runBefore,
+            SquireCleanupRunAuthorization.Resolve(
+                deterministicReviewActive: false,
+                snapshotComplete: true,
+                selectionCount: 1,
+                supportedBatch: true,
+                hiddenSelectionCount: 0,
+                validationSucceeded: true,
+                running: false));
     }
 
     [Fact]

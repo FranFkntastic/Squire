@@ -36,6 +36,7 @@ internal static class SquireCleanupSurfaceStateResolver
 internal static class SquireCleanupToolbarPresentation
 {
     public const string FilterLabel = "Filter candidates";
+    public const string FilterControlId = "squire.cleanup.filter";
     public const string ColumnsLabel = "Columns";
     public const string ColumnsControlId = "squire.cleanup.columns";
     public const float MinimumControlHeight = 24f;
@@ -54,6 +55,21 @@ internal static class SquireCleanupToolbarPresentation
         if (currentFrameHeight < 0f)
             throw new ArgumentOutOfRangeException(nameof(currentFrameHeight));
         return Math.Max(MinimumControlHeight, currentFrameHeight);
+    }
+}
+
+internal static class SquireCleanupFilterEdit
+{
+    public static void Apply(
+        SquireCleanupWorkbenchState workbench,
+        string? expression,
+        Action<string>? persist)
+    {
+        ArgumentNullException.ThrowIfNull(workbench);
+        expression ??= string.Empty;
+        workbench.Search = expression;
+        workbench.Filter.SetExpression(expression);
+        persist?.Invoke(expression);
     }
 }
 

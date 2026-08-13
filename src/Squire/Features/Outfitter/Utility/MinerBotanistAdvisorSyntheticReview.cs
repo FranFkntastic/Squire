@@ -28,7 +28,8 @@ internal sealed record MinerBotanistAdvisorSyntheticPresentation(
     bool ShowProgress,
     int Completed,
     int Total,
-    bool AdviceIsRetained);
+    bool AdviceIsRetained,
+    bool OwnsNoFrontierState = false);
 
 internal sealed record MinerBotanistAdvisorDryRunFixture(
     MinerBotanistReadOnlyAdvice Advice,
@@ -86,7 +87,8 @@ internal static class MinerBotanistAdvisorSyntheticReview
             false,
             11,
             12,
-            false),
+            false,
+            true),
         _ => new(
             kind,
             "Complete generation",

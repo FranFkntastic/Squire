@@ -232,6 +232,9 @@ public sealed class AdvisorWorkspacePresentationTests
         Assert.True(stale.AdviceIsRetained);
         Assert.True(incomplete.AdviceIsRetained);
         Assert.False(abstention.ShowPriorFrontier);
+        Assert.True(abstention.OwnsNoFrontierState);
+        Assert.Equal("No authoritative recommendation", abstention.Label);
+        Assert.Contains("produced no frontier", abstention.Message, StringComparison.Ordinal);
     }
 #endif
 

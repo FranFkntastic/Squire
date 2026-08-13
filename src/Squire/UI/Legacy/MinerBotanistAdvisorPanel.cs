@@ -158,11 +158,8 @@ internal sealed class MinerBotanistAdvisorPanel
         if (displayedAdvice is not { Frontier: { } frontier } advice || frontier.Pareto.Frontier.Count == 0)
         {
 #if DEBUG
-            if (syntheticReviewActive)
-            {
-                ImGui.TextWrapped("No recommendation was produced; the advisor stopped at the displayed abstention boundary.");
+            if (syntheticReviewActive && syntheticPresentation!.OwnsNoFrontierState)
                 return;
-            }
 #endif
             DrawEmptyState(presentation);
             return;

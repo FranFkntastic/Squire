@@ -93,9 +93,9 @@ public sealed class MinerBotanistReadOnlyAdvisor
         if (ineligibleCurrent is not null)
             return Abstain($"Currently equipped {ineligibleCurrent.Definition!.Name} does not match the active job and level.");
         var unsupportedCurrent = baseline.EquippedSlots.FirstOrDefault(value =>
-            value.Definition is { } definition && AdvisorEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(definition));
+            value.Definition is { } definition && AdvisorEquipmentSupportPolicy.HasUnmodeledEffect(definition));
         if (unsupportedCurrent is not null)
-            return Abstain($"Currently equipped {unsupportedCurrent.Definition!.Name} has an unmodeled effect or equip restriction.");
+            return Abstain($"Currently equipped {unsupportedCurrent.Definition!.Name} has an unmodeled effect.");
 
         var offerSemantics = family.RelevantSemantics.ToDictionary(
             semantic => semantic,

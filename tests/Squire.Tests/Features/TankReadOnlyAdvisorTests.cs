@@ -28,6 +28,38 @@ public sealed class TankReadOnlyAdvisorTests
         Assert.True(advice.AuthorityBySolutionId[advice.Nomination.Candidate.SolutionId].AdvisorMayConsider);
     }
 
+    [Fact]
+    public void Currently_equipped_restricted_item_is_admitted_but_restricted_candidate_stays_excluded()
+    {
+        var fixture = Fixture();
+        var restrictedCurrent = fixture.Baseline.EquippedSlots
+            .Select(slot => slot.Position == EquipmentLoadoutPosition.Hands && slot.Definition is not null
+                ? slot with { Definition = slot.Definition with { EquipRestrictionId = 2 } }
+                : slot)
+            .ToArray();
+        var baseline = fixture.Baseline with { EquippedSlots = restrictedCurrent };
+
+        var admitted = new MinerBotanistReadOnlyAdvisor().Build(
+            baseline,
+            fixture.Evidence,
+            itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : [],
+            TankAdvisorStatFamily.Instance,
+            TankUtilityProfile.GeneralCombatContextId);
+        var rejected = new MinerBotanistReadOnlyAdvisor().Build(
+            baseline,
+            fixture.Evidence,
+            itemId => itemId == fixture.Candidate.ItemId
+                ? [fixture.Candidate with { EquipRestrictionId = 2 }]
+                : [],
+            TankAdvisorStatFamily.Instance,
+            TankUtilityProfile.GeneralCombatContextId);
+
+        Assert.Equal(MinerBotanistAdvisorStatus.Complete, admitted.Status);
+        Assert.NotNull(admitted.Nomination);
+        Assert.Equal(MinerBotanistAdvisorStatus.Abstained, rejected.Status);
+        Assert.Contains("unmodeled effect or equip restriction", rejected.Diagnostic, StringComparison.Ordinal);
+    }
+
     private static FixtureData Fixture()
     {
         const uint currentItemId = 70_000;

@@ -74,6 +74,8 @@ internal sealed class SquireTabPanel : IDisposable
     private Task? activeRunRecovery;
     private string? batchValidationKey;
     private SquireBatchValidationResult? cachedBatchValidation;
+    private Task<SquireAnalysis>? activeRefreshAnalysis;
+    private PendingRefresh? pendingRefresh;
 #if DEBUG
     private SquireCleanupSyntheticReview? cleanupSyntheticReview;
 #endif
@@ -159,6 +161,7 @@ internal sealed class SquireTabPanel : IDisposable
 
     public void Draw()
     {
+        CompleteRefreshIfReady();
         MaybeRefreshAutomatically();
         DrawWorkspaceSelector();
         ImGui.Separator();
@@ -522,6 +525,7 @@ internal sealed class SquireTabPanel : IDisposable
     {
         _ = operationalStatus.Current(DateTimeOffset.UtcNow);
         advisorSession.Tick();
+        CompleteRefreshIfReady();
         if (automaticRefreshRequested)
             MaybeRefreshAutomatically();
     }
@@ -540,6 +544,9 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void Refresh(bool reconcileSelections, string trigger, bool allowDuringRun = false)
     {
+        CompleteRefreshIfReady();
+        if (activeRefreshAnalysis is { IsCompleted: false })
+            return;
         var runActive = activeRun is { IsCompleted: false };
         if (runActive && !allowDuringRun)
         {
@@ -552,11 +559,14 @@ internal sealed class SquireTabPanel : IDisposable
         try
         {
             var previousAnalysis = analysis;
+            var refreshTiming = Stopwatch.StartNew();
             var snapshot = snapshotSource.Capture();
+            var snapshotMilliseconds = refreshTiming.Elapsed.TotalMilliseconds;
             outfitterTargets = outfitterTargetCatalog.Build(
                 snapshot,
                 new Dictionary<ulong, CachedRetainer>(),
                 retainerMetadataSource.ReadAll());
+            var targetMilliseconds = refreshTiming.Elapsed.TotalMilliseconds - snapshotMilliseconds;
             var policy = CreateProtectionPolicy(snapshot.Identity.Scope?.LocalContentId);
             var capabilities = capabilitySource.Capture();
             var inputSignature = SquireAnalysisInputSignature.Create(snapshot, capabilities, policy);
@@ -567,45 +577,20 @@ internal sealed class SquireTabPanel : IDisposable
                 nextAutomaticRefreshAt = DateTimeOffset.UtcNow.AddSeconds(2);
                 return;
             }
-            var refreshedAnalysis = evaluator.Evaluate(
-                snapshot,
-                capabilities,
-                policy);
-            var sameCharacter = previousAnalysis?.Snapshot.Identity.Scope?.LocalContentId is { } previousContentId &&
-                                snapshot.Identity.Scope?.LocalContentId == previousContentId;
-            SquireSelectionReconciliation? reconciliation = null;
-            if (reconcileSelections && sameCharacter)
-                reconciliation = cleanupWorkbench.Review.Reconcile(refreshedAnalysis);
-            else
-                cleanupWorkbench.Review.Adopt(refreshedAnalysis);
-
-            analysis = refreshedAnalysis;
-            lastAnalysisInputSignature = inputSignature;
-            if (reconcileSelections && sameCharacter)
-            {
-                var currentFingerprints = analysis.Candidates.Select(candidate => candidate.Instance.Fingerprint)
-                    .ToHashSet(EquipmentInstanceFingerprintComparer.Instance);
-                cleanupWorkbench.TableSelection.Retain(currentFingerprints);
-                if (cleanupWorkbench.FocusedItem is { } focused && !currentFingerprints.Contains(focused))
-                    cleanupWorkbench.FocusedItem = null;
-            }
-            else
-            {
-                cleanupWorkbench.TableSelection.Clear();
-                cleanupWorkbench.FocusedItem = null;
-            }
-            InvalidateRunAuthorization();
-            cleanupWorkbench.HiddenBatchCount = 0;
             automaticRefreshRequested = false;
             automaticRefreshTrigger = "Automatic refresh";
             nextAutomaticRefreshAt = DateTimeOffset.UtcNow.AddSeconds(2);
-            if (!runActive)
-                operationalStatus.Resolve(SquireOperationalStatusSource.Refresh, DateTimeOffset.UtcNow);
-            reconciliationNotice = reconciliation?.RemovedReasons.Count > 0
-                ? $"{trigger} removed {reconciliation.RemovedReasons.Count} stale cleanup-batch item(s): {string.Join(" ", reconciliation.RemovedReasons.Take(3))}"
-                : reconciliation is { PreservedCount: > 0 }
-                    ? $"{trigger} preserved {reconciliation.PreservedCount} exact cleanup-batch item(s); confirmation was reset."
-                    : null;
+            pendingRefresh = new(
+                previousAnalysis,
+                snapshot,
+                inputSignature,
+                reconcileSelections,
+                trigger,
+                allowDuringRun,
+                refreshTiming,
+                snapshotMilliseconds,
+                targetMilliseconds);
+            activeRefreshAnalysis = Task.Run(() => evaluator.Evaluate(snapshot, capabilities, policy));
         }
         catch (Exception ex)
         {
@@ -789,6 +774,87 @@ internal sealed class SquireTabPanel : IDisposable
             DrawDiagnostics(value);
         }
     }
+
+    private void CompleteRefreshIfReady()
+    {
+        if (activeRefreshAnalysis is not { IsCompleted: true } completed || pendingRefresh is not { } pending)
+            return;
+        activeRefreshAnalysis = null;
+        pendingRefresh = null;
+        if (completed.IsFaulted)
+        {
+            if (analysis is null)
+                cleanupWorkbench.Review.Invalidate();
+            operationalStatus.ReportFailure(
+                SquireOperationalStatusSource.Refresh,
+                $"{pending.Trigger} failed: {completed.Exception?.GetBaseException().Message ?? "Evaluation failed."}",
+                DateTimeOffset.UtcNow);
+            nextAutomaticRefreshAt = DateTimeOffset.UtcNow.AddSeconds(5);
+            return;
+        }
+        if (completed.IsCanceled)
+            return;
+        if (activeRun is { IsCompleted: false } && !pending.AllowDuringRun)
+        {
+            RequestAutomaticRefresh(pending.Trigger, TimeSpan.FromMilliseconds(150));
+            return;
+        }
+
+        var refreshedAnalysis = completed.Result;
+        var sameCharacter = pending.PreviousAnalysis?.Snapshot.Identity.Scope?.LocalContentId is { } previousContentId &&
+                            pending.Snapshot.Identity.Scope?.LocalContentId == previousContentId;
+        SquireSelectionReconciliation? reconciliation = null;
+        if (pending.ReconcileSelections && sameCharacter)
+            reconciliation = cleanupWorkbench.Review.Reconcile(refreshedAnalysis);
+        else
+            cleanupWorkbench.Review.Adopt(refreshedAnalysis);
+
+        analysis = refreshedAnalysis;
+        lastAnalysisInputSignature = pending.InputSignature;
+        if (pending.ReconcileSelections && sameCharacter)
+        {
+            var currentFingerprints = analysis.Candidates.Select(candidate => candidate.Instance.Fingerprint)
+                .ToHashSet(EquipmentInstanceFingerprintComparer.Instance);
+            cleanupWorkbench.TableSelection.Retain(currentFingerprints);
+            if (cleanupWorkbench.FocusedItem is { } focused && !currentFingerprints.Contains(focused))
+                cleanupWorkbench.FocusedItem = null;
+        }
+        else
+        {
+            cleanupWorkbench.TableSelection.Clear();
+            cleanupWorkbench.FocusedItem = null;
+        }
+        InvalidateRunAuthorization();
+        cleanupWorkbench.HiddenBatchCount = 0;
+        operationalStatus.Resolve(SquireOperationalStatusSource.Refresh, DateTimeOffset.UtcNow);
+        reconciliationNotice = reconciliation?.RemovedReasons.Count > 0
+            ? $"{pending.Trigger} removed {reconciliation.RemovedReasons.Count} stale cleanup-batch item(s): {string.Join(" ", reconciliation.RemovedReasons.Take(3))}"
+            : reconciliation is { PreservedCount: > 0 }
+                ? $"{pending.Trigger} preserved {reconciliation.PreservedCount} exact cleanup-batch item(s); confirmation was reset."
+                : null;
+#if DEBUG
+        var evaluationMilliseconds = pending.Timing.Elapsed.TotalMilliseconds - pending.SnapshotMilliseconds - pending.TargetMilliseconds;
+        if (pending.Timing.Elapsed.TotalMilliseconds >= 50)
+            Plugin.Log.Information(
+                "[Squire] Refresh timing ({Trigger}): snapshot={Snapshot:F1}ms targets={Targets:F1}ms evaluation={Evaluation:F1}ms total={Total:F1}ms",
+                pending.Trigger,
+                pending.SnapshotMilliseconds,
+                pending.TargetMilliseconds,
+                evaluationMilliseconds,
+                pending.Timing.Elapsed.TotalMilliseconds);
+#endif
+    }
+
+    private sealed record PendingRefresh(
+        SquireAnalysis? PreviousAnalysis,
+        CharacterEquipmentSnapshot Snapshot,
+        string InputSignature,
+        bool ReconcileSelections,
+        string Trigger,
+        bool AllowDuringRun,
+        Stopwatch Timing,
+        double SnapshotMilliseconds,
+        double TargetMilliseconds);
 
     private void ToggleSnapshotDiagnostics() => showSnapshotDiagnostics = !showSnapshotDiagnostics;
 

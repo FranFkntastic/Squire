@@ -88,6 +88,19 @@ public sealed class AdvisorWorkspacePresentationTests
             Assert.DoesNotContain("MIN", presentation.EmptyMessage, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void SavedGearsetReviewActionNamesTheSelectedTargetInsteadOfTheActiveLoadout()
+    {
+        var presentation = AdvisorWorkspacePresentationResolver.Resolve(
+            new(true, TankUtilityProfile.MarauderClassJobId, "MRD", 10, "saved gearset 'Marauder' (MRD)"),
+            State(MinerBotanistAdvisorSessionStage.Idle),
+            hasFrontier: false);
+
+        Assert.Equal(
+            "Evaluate gear upgrades for saved gearset 'Marauder' (MRD)",
+            presentation.PrimaryActionReviewLabel);
+    }
+
     [Theory]
     [InlineData(MinerBotanistUtilityProfile.BotanistClassJobId, "BTN", "gathering")]
     [InlineData(CrafterUtilityProfile.BlacksmithClassJobId, "BSM", "crafting")]

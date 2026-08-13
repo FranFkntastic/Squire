@@ -12,7 +12,7 @@ public sealed class PhysicalRangedReadOnlyAdvisorTests
     [InlineData(PhysicalRangedUtilityProfile.BardClassJobId)]
     [InlineData(PhysicalRangedUtilityProfile.MachinistClassJobId)]
     [InlineData(PhysicalRangedUtilityProfile.DancerClassJobId)]
-    public void Shared_family_builds_frontier_but_experimental_gate_blocks_nomination(uint classJobId)
+    public void Shared_family_builds_frontier_and_nominates_exact_componentwise_upgrade(uint classJobId)
     {
         var fixture = Fixture(classJobId);
 
@@ -25,12 +25,11 @@ public sealed class PhysicalRangedReadOnlyAdvisorTests
 
         Assert.True(advice.Status == MinerBotanistAdvisorStatus.Complete, advice.Diagnostic);
         Assert.NotNull(advice.Frontier);
-        Assert.Null(advice.Nomination);
+        Assert.NotNull(advice.Nomination);
         Assert.Contains(advice.OffersByAllocation.Values, offer =>
             offer.Offer.Definition.ItemId == fixture.Candidate.ItemId &&
             offer.Utility.Get("physical-damage") == 141);
-        Assert.Contains(advice.AuthorityBySolutionId.Values, authority =>
-            authority.Reasons.Any(reason => reason.Contains("experimental", StringComparison.OrdinalIgnoreCase)));
+        Assert.Contains(advice.AuthorityBySolutionId.Values, authority => authority.AdvisorMayConsider);
     }
 
     [Theory]

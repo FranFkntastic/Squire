@@ -395,6 +395,28 @@ public sealed class PlayerAdvisorBaselineTests
         Assert.Equal(1_720, value);
     }
 
+    [Fact]
+    public void Missing_relevant_stat_is_exact_zero_even_when_unrelated_definition_stat_is_unknown()
+    {
+        var profile = new EquipmentStatProfile(
+            [new(999, EquipmentStatSemantic.Unknown, 4, false, "Unmodeled")],
+            0,
+            0,
+            3,
+            3,
+            false);
+
+        var resolved = DalamudPlayerAdvisorBaselineSource.TryGetStaticUnmeldedContribution(
+            profile,
+            EquipmentStatSemantic.Strength,
+            1,
+            [],
+            out var value);
+
+        Assert.True(resolved);
+        Assert.Equal(0, value);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

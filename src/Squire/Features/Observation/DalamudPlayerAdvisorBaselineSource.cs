@@ -548,7 +548,7 @@ public sealed unsafe class DalamudPlayerAdvisorBaselineSource : IOutfitterTarget
         out int value)
     {
         value = 0;
-        if (profile is not { IsComplete: true } || semanticBaseParamId == 0 || attachedMateriaBaseParamIds is null ||
+        if (profile is null || semanticBaseParamId == 0 || attachedMateriaBaseParamIds is null ||
             attachedMateriaBaseParamIds.Contains(semanticBaseParamId))
         {
             return false;

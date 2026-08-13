@@ -22,10 +22,23 @@ public sealed class SquireCandidateEvaluator
         protectionPolicy ??= new SquireProtectionPolicy();
         var effectiveRules = protectionPolicy.CleanupRules ?? SquireLegacyCleanupRuleAdapter.Create(protectionPolicy);
         var effectivePolicy = protectionPolicy with { CleanupRules = effectiveRules };
+        var preparedRules = ruleEngine.Prepare(effectiveRules);
         var gearsetProtection = GearsetProtectionIndex.Create(snapshot.Gearsets);
-        var candidates = snapshot.Instances
-            .Select(instance => EvaluateInstance(snapshot, instance, gearsetProtection, capabilities, effectivePolicy))
-            .ToArray();
+        var exactQualityCounts = snapshot.Instances
+            .GroupBy(instance => (instance.Fingerprint.ItemId, instance.Fingerprint.IsHighQuality))
+            .ToDictionary(group => group.Key, group => group.Count());
+        var candidates = new List<SquireCandidate>(snapshot.Instances.Count);
+        foreach (var instance in snapshot.Instances)
+        {
+            candidates.Add(EvaluateInstance(
+                snapshot,
+                instance,
+                gearsetProtection,
+                capabilities,
+                effectivePolicy,
+                preparedRules,
+                exactQualityCounts.GetValueOrDefault((instance.Fingerprint.ItemId, instance.Fingerprint.IsHighQuality))));
+        }
         return new SquireAnalysis(snapshot, candidates, effectivePolicy);
     }
 
@@ -34,16 +47,18 @@ public sealed class SquireCandidateEvaluator
         EquipmentInstanceSnapshot instance,
         GearsetProtectionIndex gearsetProtection,
         SquireDispositionCapabilities capabilities,
-        SquireProtectionPolicy policy)
+        SquireProtectionPolicy policy,
+        SquirePreparedCleanupRules preparedRules,
+        int exactQualityCount)
     {
         if (!snapshot.Definitions.TryGetValue(instance.Fingerprint.ItemId, out var definition))
             return Unsupported(instance, UnknownDefinition(instance.Fingerprint.ItemId));
 
-        var hardProtections = GetHardProtections(snapshot, instance, definition, gearsetProtection, capabilities);
+        var hardProtections = GetHardProtections(snapshot, instance, definition, gearsetProtection, capabilities, exactQualityCount);
         var use = useAnalyzer.Analyze(instance, definition, snapshot.Jobs, snapshot.Gearsets, snapshot.Instances, snapshot.Definitions);
         var eligibility = dispositionEligibility.Evaluate(definition, capabilities);
         var ruleContext = CreateRuleContext(policy.CharacterContentId, instance, definition, use, eligibility.SupportedDispositions);
-        var ruleEvaluation = ruleEngine.Evaluate(ruleContext, policy.CleanupRules ?? []);
+        var ruleEvaluation = ruleEngine.Evaluate(ruleContext, preparedRules);
         if (!ruleEvaluation.IsValid)
         {
             return Candidate(
@@ -60,9 +75,6 @@ public sealed class SquireCandidateEvaluator
                 ruleEvaluation: ruleEvaluation);
         }
 
-        var exactQualityCount = snapshot.Instances.Count(value =>
-            value.Fingerprint.ItemId == definition.ItemId &&
-            value.Fingerprint.IsHighQuality == instance.Fingerprint.IsHighQuality);
         var gearsetRequired = gearsetProtection.RequiredCount(definition.ItemId, instance.Fingerprint.IsHighQuality);
         var duplicateStatus = new SquireDuplicateStatus(exactQualityCount, ruleEvaluation.MinimumCopies, gearsetRequired);
         var reasons = new List<SquireReason>(hardProtections);
@@ -283,16 +295,14 @@ public sealed class SquireCandidateEvaluator
         EquipmentInstanceSnapshot instance,
         EquipmentItemDefinition definition,
         GearsetProtectionIndex gearsetProtection,
-        SquireDispositionCapabilities capabilities)
+        SquireDispositionCapabilities capabilities,
+        int exactQualityCount)
     {
         var reasons = new List<SquireReason>();
         if (!snapshot.Diagnostics.IsComplete)
             reasons.Add(new("PartialSnapshot", "The equipment snapshot is incomplete.", SquireReasonSeverity.Blocking));
         if (instance.IsEquipped)
             reasons.Add(new("CurrentlyEquipped", "This exact item is currently equipped.", SquireReasonSeverity.Blocking));
-        var exactQualityCount = snapshot.Instances.Count(value =>
-            value.Fingerprint.ItemId == definition.ItemId &&
-            value.Fingerprint.IsHighQuality == instance.Fingerprint.IsHighQuality);
         if (gearsetProtection.IsProtected(definition.ItemId, instance.Fingerprint.IsHighQuality, exactQualityCount))
             reasons.Add(new(
                 "ReferencedByGearset",

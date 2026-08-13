@@ -213,23 +213,38 @@ public sealed record SquireCleanupRuleEvaluation(
     public bool IsValid => Errors.Count == 0;
 }
 
+public sealed record SquirePreparedCleanupRules(
+    IReadOnlyList<SquireCleanupRule> EnabledRules,
+    IReadOnlyList<string> Errors);
+
 public sealed class SquireCleanupRuleEngine
 {
-    public SquireCleanupRuleEvaluation Evaluate(
-        SquireCleanupRuleContext context,
-        IEnumerable<SquireCleanupRule> rules)
+    public SquirePreparedCleanupRules Prepare(IEnumerable<SquireCleanupRule> rules)
     {
         ArgumentNullException.ThrowIfNull(rules);
         var enabled = rules.Where(rule => rule.Enabled).ToArray();
         var errors = enabled.SelectMany(rule => rule.Validate()).ToList();
-        var duplicateIds = enabled.GroupBy(rule => rule.Id, StringComparer.OrdinalIgnoreCase)
+        errors.AddRange(enabled.GroupBy(rule => rule.Id, StringComparer.OrdinalIgnoreCase)
             .Where(group => group.Count() > 1)
-            .Select(group => $"Enabled rule ID '{group.Key}' is duplicated.");
-        errors.AddRange(duplicateIds);
-        if (errors.Count > 0)
-            return Invalid(errors);
+            .Select(group => $"Enabled rule ID '{group.Key}' is duplicated."));
+        return new(enabled, errors);
+    }
 
-        var matched = enabled.Where(rule => rule.Matches(context))
+    public SquireCleanupRuleEvaluation Evaluate(
+        SquireCleanupRuleContext context,
+        IEnumerable<SquireCleanupRule> rules)
+        => Evaluate(context, Prepare(rules));
+
+    public SquireCleanupRuleEvaluation Evaluate(
+        SquireCleanupRuleContext context,
+        SquirePreparedCleanupRules prepared)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+        if (prepared.Errors.Count > 0)
+            return Invalid(prepared.Errors);
+        var errors = new List<string>();
+
+        var matched = prepared.EnabledRules.Where(rule => rule.Matches(context))
             .OrderByDescending(rule => rule.Priority)
             .ThenBy(rule => rule.Id, StringComparer.Ordinal)
             .ToArray();

@@ -7,7 +7,8 @@ public sealed record AdvisorCharacterSubject(
     bool IsAvailable,
     uint? ClassJobId,
     string JobLabel,
-    short? Level)
+    short? Level,
+    string? ReviewTargetLabel = null)
 {
     public static AdvisorCharacterSubject Unavailable { get; } = new(false, null, "No active character", null);
 }
@@ -74,6 +75,9 @@ public static class AdvisorWorkspacePresentationResolver
         var context = ResolveContext(family, state, staleJobEvidence);
         var canEvaluate = characterAvailable && family is not null && !state.IsBusy;
         var primaryLabel = state.Advice is null || staleJobEvidence ? "Evaluate gear upgrades" : "Refresh evaluation";
+        var reviewTargetLabel = string.IsNullOrWhiteSpace(subject.ReviewTargetLabel)
+            ? $"the active {jobLabel}"
+            : subject.ReviewTargetLabel.Trim();
         var supportedFrontier = hasFrontier && characterAvailable && family is not null;
         var showRetained = state.AdviceIsRetained && supportedFrontier;
         var showRecovery = !supportedFrontier && (!characterAvailable || family is null);
@@ -92,8 +96,8 @@ public static class AdvisorWorkspacePresentationResolver
             canEvaluate,
             primaryLabel,
             state.Advice is null || staleJobEvidence
-                ? $"Evaluate gear upgrades for the active {jobLabel}"
-                : $"Refresh gear upgrades for the active {jobLabel}",
+                ? $"Evaluate gear upgrades for {reviewTargetLabel}"
+                : $"Refresh gear upgrades for {reviewTargetLabel}",
             showRecovery,
             recovery.Title,
             recovery.Message,

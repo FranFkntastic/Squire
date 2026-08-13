@@ -492,7 +492,12 @@ internal sealed class MinerBotanistAdvisorPanel
     {
         if (selectedTarget?.Job is not { } job)
             return active;
-        return new(true, job.ClassJobId, job.Abbreviation, checked((short)job.Level));
+        return new(
+            true,
+            job.ClassJobId,
+            job.Abbreviation,
+            checked((short)job.Level),
+            $"saved gearset '{selectedTarget.Name}' ({job.Abbreviation})");
     }
 
 #if DEBUG

@@ -106,6 +106,7 @@ public sealed class Plugin : IDalamudPlugin
         if (migrationPreview.CanImport)
             _ = importer.Import();
         var snapshotSource = new DalamudCharacterEquipmentSnapshotSource(PlayerState, DataManager, Log);
+        var advisorCharacterSource = new DalamudAdvisorCharacterSubjectSource(PlayerState, DataManager);
         var capabilities = new DalamudSquireDispositionCapabilitySource();
         var ruleStore = new SquireCleanupRuleStore(configuration);
         var vnavmesh = new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(pluginInterface, Log));
@@ -149,6 +150,7 @@ public sealed class Plugin : IDalamudPlugin
             DataManager,
             listingSource,
             new DalamudPlayerAdvisorBaselineSource(snapshotSource, PlayerState, DataManager),
+            advisorCharacterSource.Capture,
             () => configuration.ActiveMarketAcquisitionRequestDocument?.Region
                   ?? configuration.ActiveMarketAcquisitionClaim?.Region
                   ?? "North America",

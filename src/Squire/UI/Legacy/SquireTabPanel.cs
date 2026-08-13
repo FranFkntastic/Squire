@@ -95,6 +95,7 @@ internal sealed class SquireTabPanel : IDisposable
         IDataManager dataManager,
         IMarketAcquisitionListingSource marketListingSource,
         IPlayerAdvisorBaselineSource playerAdvisorBaselineSource,
+        Func<AdvisorCharacterSubject> captureAdvisorCharacter,
         Func<string> resolveAcquisitionRegion,
         Func<bool> getAgentBridgeAudit,
         Action<bool> setAgentBridgeAudit)
@@ -136,6 +137,7 @@ internal sealed class SquireTabPanel : IDisposable
             advisorSession,
             reviewRegistry,
             marketListingSource,
+            captureAdvisorCharacter,
             resolveAcquisitionRegion,
             transfer => stageOutfitterTransfer?.Invoke(transfer));
         workspaceState = new SquireWorkspaceState(config);

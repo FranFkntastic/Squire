@@ -8,6 +8,7 @@ using Dalamud.Bindings.ImGui;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Equipment;
 using Franthropy.Dalamud.UI.Plots;
+using Franthropy.Dalamud.UI.Styling;
 using MarketMafioso.AgentBridge;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Squire;
@@ -16,6 +17,7 @@ using MarketMafioso.Squire.Outfitter.Utility;
 using MarketMafioso.Squire.Outfitter.Acquisition;
 using MarketMafioso.WorkshopPrep;
 using MarketMafioso.Windows.Main;
+using Squire.UI;
 
 namespace MarketMafioso.Windows.Squire;
 
@@ -29,6 +31,7 @@ internal sealed class MinerBotanistAdvisorPanel
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly Action<OutfitterWorkbenchTransfer> stageTransfer;
     private readonly IMarketAcquisitionListingSource listingSource;
+    private readonly Func<AdvisorCharacterSubject> captureCharacter;
     private readonly Func<string> resolveRegion;
     private readonly ParetoFrontierPlotBuilder plotBuilder = new();
     private readonly DalamudPlotContainer plotContainer = new();
@@ -66,6 +69,7 @@ internal sealed class MinerBotanistAdvisorPanel
         MinerBotanistAdvisorSession session,
         AgentBridgeUiReviewRegistry reviewRegistry,
         IMarketAcquisitionListingSource listingSource,
+        Func<AdvisorCharacterSubject> captureCharacter,
         Func<string> resolveRegion,
         Action<OutfitterWorkbenchTransfer> stageTransfer)
     {
@@ -73,6 +77,7 @@ internal sealed class MinerBotanistAdvisorPanel
         this.session = session ?? throw new ArgumentNullException(nameof(session));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
         this.listingSource = listingSource ?? throw new ArgumentNullException(nameof(listingSource));
+        this.captureCharacter = captureCharacter ?? throw new ArgumentNullException(nameof(captureCharacter));
         this.resolveRegion = resolveRegion ?? throw new ArgumentNullException(nameof(resolveRegion));
         this.stageTransfer = stageTransfer ?? throw new ArgumentNullException(nameof(stageTransfer));
         context = GathererAdvisorStatFamily.Instance.ResolveContext(config.Squire.OutfitterAdvisorContext);
@@ -95,7 +100,31 @@ internal sealed class MinerBotanistAdvisorPanel
             ? syntheticReviewAdvice
             : syntheticReviewActive ? null : displayedAdvice;
 #endif
-        DrawControls(state);
+        var subject = captureCharacter();
+#if DEBUG
+        if (syntheticReviewActive)
+            subject = new(true, MinerBotanistUtilityProfile.MinerClassJobId, "MIN", 100);
+#endif
+        var evaluatedClassJobId = displayedAdvice?.Frontier?.Pareto.Frontier.FirstOrDefault()?.Utility.Context.ClassJobId;
+        if (displayedAdvice is not null &&
+            !AdvisorWorkspacePresentationResolver.MayPresentFrontier(subject, evaluatedClassJobId))
+        {
+            displayedAdvice = null;
+        }
+        var hasFrontier = displayedAdvice?.Frontier?.Pareto.Frontier.Count > 0;
+#if DEBUG
+        var deterministicReviewAvailable = config.EnableMarketAcquisitionDryRunTools;
+#else
+        const bool deterministicReviewAvailable = false;
+#endif
+        var presentation = AdvisorWorkspacePresentationResolver.Resolve(
+            subject,
+            state,
+            hasFrontier,
+            deterministicReviewAvailable);
+        AdvisorWorkspaceComponentRenderer.DrawHeader(presentation);
+        if (!presentation.ShowRecoveryCallout)
+            DrawControls(state, presentation, subject);
 #if DEBUG
         if (syntheticReviewActive)
         {
@@ -122,25 +151,7 @@ internal sealed class MinerBotanistAdvisorPanel
         else
 #endif
         {
-            if (state.AdviceIsRetained)
-                ImGui.TextColored(MarketMafiosoUiTheme.Warning,
-                    RetainedAdviceLabel(state.Stage));
-            if (state.IsBusy)
-            {
-                ImGui.TextColored(MarketMafiosoUiTheme.Muted, FriendlyProgressMessage(state.Stage));
-                var fraction = state.Total is > 0 ? Math.Clamp((float)state.Completed / state.Total.Value, 0f, 1f) : 0f;
-                ImGui.ProgressBar(fraction, new Vector2(-1, 0), state.Total is > 0
-                    ? $"{state.Completed:N0} / {state.Total:N0}"
-                    : string.Empty);
-            }
-            else if (state.Stage is MinerBotanistAdvisorSessionStage.Abstained or
-                     MinerBotanistAdvisorSessionStage.Failed or
-                     MinerBotanistAdvisorSessionStage.Cancelled)
-            {
-                ImGui.PushStyleColor(ImGuiCol.Text, StatusColor(state.Stage));
-                ImGui.TextWrapped(state.Message);
-                ImGui.PopStyleColor();
-            }
+            AdvisorWorkspaceComponentRenderer.DrawSessionStatus(state, presentation);
         }
         ImGui.Separator();
 
@@ -153,7 +164,7 @@ internal sealed class MinerBotanistAdvisorPanel
                 return;
             }
 #endif
-            DrawEmptyState(state);
+            DrawEmptyState(presentation);
             return;
         }
         EnsureSelection(advice);
@@ -177,9 +188,9 @@ internal sealed class MinerBotanistAdvisorPanel
             !ImGui.BeginTable("##SquireAdvisorWorkspace", 2,
                 ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingStretchProp))
         {
-            DrawSelectedDecision(advice, selected);
+            DrawSelectedDecisionComponent(advice, selected);
             ImGui.Separator();
-            DrawFrontierExplorer(advice, selected);
+            DrawFrontierComponent(advice, selected);
             return;
         }
 
@@ -187,13 +198,13 @@ internal sealed class MinerBotanistAdvisorPanel
         ImGui.TableSetupColumn("Exact frontier", ImGuiTableColumnFlags.WidthStretch, 0.85f);
         ImGui.TableNextRow();
         ImGui.TableNextColumn();
-        DrawSelectedDecision(advice, selected);
+        DrawSelectedDecisionComponent(advice, selected);
         ImGui.TableNextColumn();
-        DrawFrontierExplorer(advice, selected);
+        DrawFrontierComponent(advice, selected);
         ImGui.EndTable();
     }
 
-    private void DrawSelectedDecision(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
+    private void DrawSelectedDecisionComponent(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
     {
         var selectedOffers = selected.Candidate.Selections
             .Select(selection => advice.OffersByAllocation.GetValueOrDefault(selection.AllocationKey))
@@ -221,7 +232,7 @@ internal sealed class MinerBotanistAdvisorPanel
         ImGui.SameLine();
         ImGui.TextDisabled($"{changedSlotCount:N0} changed slot{(changedSlotCount == 1 ? string.Empty : "s")}");
         DrawDecisionSummary(advice, selected);
-        DrawAcquisitionChecklist(advice, selected);
+        DrawAcquisitionHandoffComponent(advice, selected);
 
         if (ImGui.CollapsingHeader($"Full selected loadout ({selected.Candidate.Selections.Count:N0} slots, {changedSlotCount:N0} changes)##SquireAdvisorLoadoutDisclosure"))
             DrawSelectedLoadout(advice, selected);
@@ -229,7 +240,7 @@ internal sealed class MinerBotanistAdvisorPanel
             DrawAdjacentTradeoffs(advice);
     }
 
-    private void DrawFrontierExplorer(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
+    private void DrawFrontierComponent(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
     {
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, "COMPARE OPTIONS");
         ImGui.SameLine();
@@ -249,7 +260,7 @@ internal sealed class MinerBotanistAdvisorPanel
         if (ImGui.SmallButton($"{label}##SquireAdvisorFrontierView{view}"))
             frontierView = view;
         RegisterLastControl(
-            $"squire.outfitter.advisor.frontier-view.{view.ToString().ToLowerInvariant()}",
+            view == AdvisorFrontierView.Solutions ? AdvisorReviewedControlIds.FrontierList : AdvisorReviewedControlIds.FrontierPlot,
             $"Show exact frontier as {label.ToLowerInvariant()}",
             AgentBridgeUiControlKind.Select,
             true,
@@ -258,9 +269,14 @@ internal sealed class MinerBotanistAdvisorPanel
             () => frontierView = view);
     }
 
-    private void DrawControls(MinerBotanistAdvisorSessionState state)
+    private void DrawControls(
+        MinerBotanistAdvisorSessionState state,
+        AdvisorWorkspacePresentation presentation,
+        AdvisorCharacterSubject subject)
     {
-        var hasGathererContext = ContextOrder.Any(candidate => candidate.Id == state.Context.Id);
+        var family = subject.ClassJobId is { } classJobId ? AdvisorStatFamilies.Resolve(classJobId) : null;
+        var contexts = family?.ProfileDescriptor.Contexts ?? [];
+        var selectedContext = family?.ResolveContext(context.Id) ?? context;
 #if DEBUG
         if (s4GoldenFixture is not null)
         {
@@ -268,35 +284,35 @@ internal sealed class MinerBotanistAdvisorPanel
         }
         else
 #endif
-        if (!hasGathererContext)
+        if (contexts.Count <= 1)
         {
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Context · {state.Context.Label}");
+            DalamudUiChrome.DrawStatusFact("Context", selectedContext.Label, SquireUiTheme.Current.Palette);
         }
         else
         {
             ImGui.SetNextItemWidth(230f);
-            if (ImGui.BeginCombo("MIN/BTN context##SquireAdvisorContext", ContextLabel(context)))
+            if (ImGui.BeginCombo($"{presentation.FamilyLabel} context##SquireAdvisorContext", ContextLabel(selectedContext)))
             {
-                foreach (var candidate in ContextOrder)
+                foreach (var candidate in contexts)
                 {
-                    if (ImGui.Selectable(ContextLabel(candidate), candidate == context))
+                    if (ImGui.Selectable(ContextLabel(candidate), candidate.Id == selectedContext.Id))
                         SetContext(candidate);
                 }
                 ImGui.EndCombo();
             }
             var contextMin = ImGui.GetItemRectMin();
             var contextMax = ImGui.GetItemRectMax();
-            foreach (var candidate in ContextOrder)
+            foreach (var candidate in contexts)
             {
                 var captured = candidate;
                 reviewRegistry.Register(
-                    $"squire.outfitter.advisor.context.{candidate.ConfigurationValue.ToLowerInvariant()}",
+                    AdvisorReviewedControlIds.ContextPrefix + candidate.ConfigurationValue.ToLowerInvariant(),
                     $"Use {ContextLabel(candidate)}",
                     AgentBridgeUiControlKind.Select,
                     contextMin,
                     contextMax,
                     !state.IsBusy,
-                    candidate == context,
+                    candidate.Id == selectedContext.Id,
                     ContextLabel(candidate),
                     () => SetContext(captured));
             }
@@ -304,31 +320,17 @@ internal sealed class MinerBotanistAdvisorPanel
         ImGui.SameLine();
         if (state.IsBusy)
         {
-            if (ImGui.Button("Cancel##SquireAdvisor"))
-                session.Cancel();
-            RegisterLastControl(
-                "squire.outfitter.advisor.cancel",
-                "Cancel the current advisor observation or market refresh",
-                AgentBridgeUiControlKind.Button,
-                true,
-                false,
-                null,
-                session.Cancel);
+            DrawCancelControl();
         }
         else if (state.Stage != MinerBotanistAdvisorSessionStage.Idle)
         {
-            var evaluationLabel = state.Advice is null
-                ? "Evaluate gear upgrades##SquireAdvisor"
-                : "Refresh evaluation##SquireAdvisor";
-            if (ImGui.Button(evaluationLabel))
+            if (ImGuiUi.Button($"{presentation.PrimaryActionLabel}##SquireAdvisor", presentation.CanEvaluate))
                 Begin();
             RegisterLastControl(
-                "squire.outfitter.advisor.refresh",
-                state.Advice is null
-                    ? "Evaluate gear upgrades from current player equipment and exact-quality evidence"
-                    : "Refresh the current gear-upgrade evaluation",
+                AdvisorReviewedControlIds.Refresh,
+                presentation.PrimaryActionReviewLabel,
                 AgentBridgeUiControlKind.Button,
-                true,
+                presentation.CanEvaluate,
                 false,
                 null,
                 Begin);
@@ -343,7 +345,7 @@ internal sealed class MinerBotanistAdvisorPanel
             if (ImGui.Button(label))
                 ToggleSyntheticReview();
             RegisterLastControl(
-                "squire.outfitter.advisor.synthetic-review",
+                AdvisorReviewedControlIds.SyntheticReview,
                 syntheticReviewAdvice is null ? "Load synthetic advisor review" : "Return to live advisor view",
                 AgentBridgeUiControlKind.Button,
                 true,
@@ -399,18 +401,34 @@ internal sealed class MinerBotanistAdvisorPanel
 
     private void Begin()
     {
+        var subject = captureCharacter();
+        var family = subject.IsAvailable && subject.ClassJobId is { } classJobId
+            ? AdvisorStatFamilies.Resolve(classJobId)
+            : null;
+        if (family is null)
+            return;
 #if DEBUG
         syntheticReviewAdvice = null;
         s4GoldenFixture = null;
 #endif
         handoffStatus = null;
         var region = resolveRegion();
-        session.Begin(context, string.IsNullOrWhiteSpace(region) ? "North America" : region);
+        session.Begin(family.ResolveContext(context.Id), string.IsNullOrWhiteSpace(region) ? "North America" : region);
     }
 
     private void SetContext(AdvisorUtilityContextDescriptor value)
     {
         if (session.State.IsBusy)
+            return;
+        var subject = captureCharacter();
+#if DEBUG
+        if (syntheticReviewAdvice is not null)
+            subject = new(true, MinerBotanistUtilityProfile.MinerClassJobId, "MIN", 100);
+#endif
+        var family = subject.IsAvailable && subject.ClassJobId is { } classJobId
+            ? AdvisorStatFamilies.Resolve(classJobId)
+            : null;
+        if (family is null || family.ProfileDescriptor.Contexts.All(candidate => candidate.Id != value.Id))
             return;
 #if DEBUG
         if (dryRunFixtureTask is not null)
@@ -818,7 +836,7 @@ internal sealed class MinerBotanistAdvisorPanel
         if (ImGuiUi.Button("< Previous", previousId is not null))
             SelectSolution(advice, previousId!);
         RegisterLastControl(
-            "squire.outfitter.advisor.solution.previous",
+            AdvisorReviewedControlIds.SolutionPrevious,
             "Select the previous visible frontier solution",
             AgentBridgeUiControlKind.Button,
             previousId is not null,
@@ -830,7 +848,7 @@ internal sealed class MinerBotanistAdvisorPanel
         if (ImGuiUi.Button("Next >", nextId is not null))
             SelectSolution(advice, nextId!);
         RegisterLastControl(
-            "squire.outfitter.advisor.solution.next",
+            AdvisorReviewedControlIds.SolutionNext,
             "Select the next visible frontier solution",
             AgentBridgeUiControlKind.Button,
             nextId is not null,
@@ -844,7 +862,7 @@ internal sealed class MinerBotanistAdvisorPanel
         if (ImGuiUi.Button("Page <", previousPageId is not null))
             SelectSolution(advice, previousPageId!);
         RegisterLastControl(
-            "squire.outfitter.advisor.solution.previous-page",
+            AdvisorReviewedControlIds.SolutionPreviousPage,
             "Select the solution one frontier page earlier",
             AgentBridgeUiControlKind.Button,
             previousPageId is not null,
@@ -858,7 +876,7 @@ internal sealed class MinerBotanistAdvisorPanel
         if (ImGuiUi.Button("Page >", nextPageId is not null))
             SelectSolution(advice, nextPageId!);
         RegisterLastControl(
-            "squire.outfitter.advisor.solution.next-page",
+            AdvisorReviewedControlIds.SolutionNextPage,
             "Select the solution one frontier page later",
             AgentBridgeUiControlKind.Button,
             nextPageId is not null,
@@ -871,7 +889,7 @@ internal sealed class MinerBotanistAdvisorPanel
             if (ImGui.Button("Advisor pick"))
                 SelectSolution(advice, nomination.Candidate.SolutionId);
             RegisterLastControl(
-                "squire.outfitter.advisor.solution.nomination",
+                AdvisorReviewedControlIds.SolutionNomination,
                 "Select the Advisor-nominated frontier solution",
                 AgentBridgeUiControlKind.Button,
                 true,
@@ -899,7 +917,7 @@ internal sealed class MinerBotanistAdvisorPanel
                 SelectSolution(advice, solution.Candidate.SolutionId);
             var capturedSolution = solution;
             RegisterLastControl(
-                $"squire.outfitter.advisor.solution.{solution.Candidate.SolutionId}",
+                AdvisorReviewedControlIds.SolutionPrefix + solution.Candidate.SolutionId,
                 $"Select frontier solution costing {FormatCost(solution.AcquisitionCostGil)} with utility {solution.Utility.UtilityScore:N1}",
                 AgentBridgeUiControlKind.Select,
                 true,
@@ -992,7 +1010,7 @@ internal sealed class MinerBotanistAdvisorPanel
         ImGui.EndTable();
     }
 
-    private void DrawAcquisitionChecklist(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
+    private void DrawAcquisitionHandoffComponent(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
     {
         var acquisitions = selected.Candidate.Selections
             .Select(value => advice.OffersByAllocation.GetValueOrDefault(value.AllocationKey))
@@ -1108,7 +1126,7 @@ internal sealed class MinerBotanistAdvisorPanel
             if (ImGuiUi.Button("Copy Artisan list", canCopyArtisan))
                 CopyArtisanList();
             RegisterLastControl(
-                "squire.outfitter.advisor.copy-artisan-list",
+                AdvisorReviewedControlIds.CopyArtisanList,
                 "Copy the selected frozen gear and subcraft recipe list for user-directed Artisan import",
                 AgentBridgeUiControlKind.Button,
                 canCopyArtisan,
@@ -1226,8 +1244,8 @@ internal sealed class MinerBotanistAdvisorPanel
             Stage();
         RegisterLastControl(
             containsCraft
-                ? "squire.outfitter.advisor.stage-materials-workbench"
-                : "squire.outfitter.advisor.stage-workbench",
+                ? AdvisorReviewedControlIds.StageMaterialsWorkbench
+                : AdvisorReviewedControlIds.StageWorkbench,
             containsCraft
                 ? "Prepare the market materials needed for the selected crafted upgrades"
                 : "Prepare the selected upgrades for acquisition",
@@ -1348,36 +1366,61 @@ internal sealed class MinerBotanistAdvisorPanel
         }
     }
 
-    private void DrawEmptyState(MinerBotanistAdvisorSessionState state)
+    private void DrawEmptyState(AdvisorWorkspacePresentation presentation)
     {
-        if (state.Stage == MinerBotanistAdvisorSessionStage.Idle)
+        Action? drawRecoveryActions = presentation.ShowCancel || presentation.ShowDeterministicReview
+            ? () => DrawRecoveryActions(presentation)
+            : null;
+        if (AdvisorWorkspaceComponentRenderer.DrawEmptyState(presentation, drawRecoveryActions))
+            Begin();
+        if (presentation.ShowEmptyIntroduction)
         {
-            ImGui.Dummy(new Vector2(0, 34f));
-            ImGui.TextColored(MarketMafiosoUiTheme.Header, "Find your next gear upgrades");
-            ImGui.TextWrapped("Squire compares your equipped MIN and BTN gear with items you own, vendor stock, crafting options, and current market listings.");
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Nothing is purchased or equipped unless you explicitly continue with an upgrade list.");
-            ImGui.Spacing();
-            if (ImGuiUi.PrimaryButton("Evaluate my gear", true))
-                Begin();
             RegisterLastControl(
-                "squire.outfitter.advisor.refresh",
-                "Evaluate gear upgrades from the active player's equipment",
+                AdvisorReviewedControlIds.Refresh,
+                presentation.PrimaryActionReviewLabel,
                 AgentBridgeUiControlKind.Button,
-                true,
+                presentation.CanEvaluate,
                 false,
                 null,
                 Begin);
         }
-        else if (state.Stage is MinerBotanistAdvisorSessionStage.Abstained or MinerBotanistAdvisorSessionStage.Failed)
-            ImGui.TextWrapped("No recommendation was produced. The incomplete evidence remains visible above instead of being replaced by a guess.");
     }
 
-    private static string FriendlyProgressMessage(MinerBotanistAdvisorSessionStage stage) => stage switch
+    private void DrawRecoveryActions(AdvisorWorkspacePresentation presentation)
     {
-        MinerBotanistAdvisorSessionStage.CapturingPlayer => "Reading your current MIN and BTN equipment…",
-        MinerBotanistAdvisorSessionStage.DiscoveringMarket => "Comparing owned, vendor, crafted, and market options…",
-        _ => "Evaluating gear upgrades…",
-    };
+        if (presentation.ShowCancel)
+            DrawCancelControl();
+#if DEBUG
+        if (!presentation.ShowDeterministicReview)
+            return;
+        if (presentation.ShowCancel)
+            ImGui.SameLine();
+        if (ImGui.Button("Load deterministic review##SquireAdvisorSyntheticRecovery"))
+            ToggleSyntheticReview();
+        RegisterLastControl(
+            AdvisorReviewedControlIds.SyntheticReview,
+            "Load deterministic advisor review",
+            AgentBridgeUiControlKind.Button,
+            true,
+            false,
+            "recovery",
+            ToggleSyntheticReview);
+#endif
+    }
+
+    private void DrawCancelControl()
+    {
+        if (ImGui.Button("Cancel##SquireAdvisor"))
+            session.Cancel();
+        RegisterLastControl(
+            AdvisorReviewedControlIds.Cancel,
+            "Cancel the current advisor observation or market refresh",
+            AgentBridgeUiControlKind.Button,
+            true,
+            false,
+            null,
+            session.Cancel);
+    }
 
     /// <summary>Label for the context the solution was actually evaluated under — never the UI selector.</summary>
     private static string ProfileContextLabel(EquipmentUtilityEvaluation evaluation) =>
@@ -1392,15 +1435,6 @@ internal sealed class MinerBotanistAdvisorPanel
         MinerBotanistAdvisorSessionStage.Abstained => MarketMafiosoUiTheme.Warning,
         MinerBotanistAdvisorSessionStage.Failed => MarketMafiosoUiTheme.Error,
         _ => MarketMafiosoUiTheme.Muted,
-    };
-
-    private static string RetainedAdviceLabel(MinerBotanistAdvisorSessionStage stage) => stage switch
-    {
-        MinerBotanistAdvisorSessionStage.CapturingPlayer or
-        MinerBotanistAdvisorSessionStage.DiscoveringMarket => "LAST VALID FRONTIER · refresh in progress",
-        MinerBotanistAdvisorSessionStage.Cancelled => "LAST VALID FRONTIER · refresh cancelled",
-        MinerBotanistAdvisorSessionStage.Failed => "LAST VALID FRONTIER · refresh failed",
-        _ => "LAST VALID FRONTIER · refresh abstained",
     };
 
     private static string FormatCost(ulong value) => value == 0 ? "No gil" : $"{value:N0} gil";
@@ -1481,7 +1515,7 @@ internal sealed class MinerBotanistAdvisorPanel
         foreach (var control in controls)
         {
             reviewRegistry.Register(
-                $"squire.outfitter.advisor.plot.{control.Id}",
+                AdvisorReviewedControlIds.PlotPrefix + control.Id,
                 control.Label,
                 AgentBridgeUiControlKind.Button,
                 control.Bounds.Minimum,

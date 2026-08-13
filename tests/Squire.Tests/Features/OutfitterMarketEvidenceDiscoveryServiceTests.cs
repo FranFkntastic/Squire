@@ -332,6 +332,21 @@ public sealed class OutfitterMarketEvidenceDiscoveryServiceTests
         Assert.Equal(30, source.Requests.Count);
     }
 
+    [Fact]
+    public async Task Bulk_source_fetches_one_bounded_generation_without_per_item_calls()
+    {
+        var source = new StubBulkListingSource();
+        var service = new OutfitterMarketEvidenceDiscoveryService(source, Cache(), utcNow: () => Now);
+        var itemIds = Enumerable.Range(1, 30).Select(value => (uint)value).ToArray();
+
+        var result = await service.DiscoverAsync(Request(itemIds), CancellationToken.None);
+
+        Assert.Equal(itemIds, Assert.Single(source.BulkRequests));
+        Assert.Empty(source.SingleRequests);
+        Assert.Equal(30, result.WorkingBook.Items.Count);
+        Assert.Equal(OutfitterMarketEvidenceGenerationStatus.Complete, result.WorkingBook.Status);
+    }
+
     private static OutfitterMarketEvidenceCache Cache() => new(TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(30));
 
     private static OutfitterMarketEvidenceRequest Request(
@@ -419,6 +434,44 @@ public sealed class OutfitterMarketEvidenceDiscoveryServiceTests
             uint itemId,
             int listingLimit,
             CancellationToken cancellationToken) => FetchListingsAsync(worldName, itemId, listingLimit, cancellationToken);
+    }
+
+    private sealed class StubBulkListingSource : IMarketAcquisitionBulkListingSource
+    {
+        public List<uint> SingleRequests { get; } = [];
+        public List<uint[]> BulkRequests { get; } = [];
+
+        public Task<MarketAcquisitionBulkListingResult> FetchListingsBulkAsync(
+            string region,
+            IReadOnlyCollection<uint> itemIds,
+            int listingLimit,
+            CancellationToken cancellationToken)
+        {
+            var ids = itemIds.Order().ToArray();
+            BulkRequests.Add(ids);
+            return Task.FromResult(new MarketAcquisitionBulkListingResult(
+                ids.ToDictionary(
+                    itemId => itemId,
+                    itemId => (IReadOnlyList<MarketAcquisitionListing>)[Listing(itemId, $"bulk-{itemId}", false, 100)]),
+                new Dictionary<uint, string>()));
+        }
+
+        public Task<IReadOnlyList<MarketAcquisitionListing>> FetchListingsAsync(
+            string region,
+            uint itemId,
+            int listingLimit,
+            CancellationToken cancellationToken)
+        {
+            SingleRequests.Add(itemId);
+            return Task.FromResult<IReadOnlyList<MarketAcquisitionListing>>([]);
+        }
+
+        public Task<IReadOnlyList<MarketAcquisitionListing>> FetchListingsForWorldAsync(
+            string worldName,
+            uint itemId,
+            int listingLimit,
+            CancellationToken cancellationToken) =>
+            FetchListingsAsync(worldName, itemId, listingLimit, cancellationToken);
     }
 
     private sealed class StubBookStore(OutfitterMarketEvidenceBook? book) : IOutfitterMarketEvidenceBookStore

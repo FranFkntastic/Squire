@@ -21,6 +21,19 @@ public interface IMarketAcquisitionListingSource
         CancellationToken cancellationToken);
 }
 
+public sealed record MarketAcquisitionBulkListingResult(
+    IReadOnlyDictionary<uint, IReadOnlyList<MarketAcquisitionListing>> ListingsByItemId,
+    IReadOnlyDictionary<uint, string> FailuresByItemId);
+
+public interface IMarketAcquisitionBulkListingSource : IMarketAcquisitionListingSource
+{
+    Task<MarketAcquisitionBulkListingResult> FetchListingsBulkAsync(
+        string region,
+        IReadOnlyCollection<uint> itemIds,
+        int listingLimit,
+        CancellationToken cancellationToken);
+}
+
 public sealed class MarketAcquisitionPlanPreparationService
 {
     public static bool CanPrepareForStatus(string status) =>

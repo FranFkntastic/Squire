@@ -3,16 +3,19 @@ using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using Franthropy.FFXIV.Market;
 
 namespace MarketMafioso.MarketAcquisition;
 
-public sealed class UniversalisMarketAcquisitionPlanSource : IMarketAcquisitionListingSource
+public sealed class UniversalisMarketAcquisitionPlanSource : IMarketAcquisitionBulkListingSource
 {
     private static readonly Uri DefaultBaseUri = new("https://universalis.app/api/v2/");
     private readonly HttpClient httpClient;
     private readonly Uri baseUri;
+    private readonly UniversalisBulkClient bulkClient;
 
     public UniversalisMarketAcquisitionPlanSource(HttpClient httpClient)
         : this(httpClient, DefaultBaseUri)
@@ -23,6 +26,40 @@ public sealed class UniversalisMarketAcquisitionPlanSource : IMarketAcquisitionL
     {
         this.httpClient = httpClient;
         this.baseUri = baseUri;
+        bulkClient = new(httpClient, baseUri);
+    }
+
+    public async Task<MarketAcquisitionBulkListingResult> FetchListingsBulkAsync(
+        string region,
+        IReadOnlyCollection<uint> itemIds,
+        int listingLimit,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(region))
+            throw new InvalidOperationException("Region is required to fetch market listings.");
+        ArgumentNullException.ThrowIfNull(itemIds);
+        var ids = itemIds.Where(itemId => itemId != 0).Distinct().ToArray();
+        if (ids.Length != itemIds.Count)
+            throw new InvalidOperationException("Bulk market item ids must be non-zero and unique.");
+
+        var result = await bulkClient.FetchAsync<UniversalisItemResponse>(
+            new()
+            {
+                WorldOrDataCenter = NormalizeRegion(region),
+                ItemIds = ids,
+                ListingsPerItem = Math.Clamp(listingLimit, 1, 100),
+            },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        var listings = result.Items.ToDictionary(
+            pair => pair.Key,
+            pair => (IReadOnlyList<MarketAcquisitionListing>)pair.Value.Listings
+                .Select(value => ToListing(pair.Key, value))
+                .ToArray());
+        var failures = result.MissingItemIds.ToDictionary(
+            itemId => itemId,
+            itemId => result.Failures.FirstOrDefault(failure => failure.ItemIds.Contains(itemId))?.Message ??
+                "Universalis bulk response omitted the requested item.");
+        return new(listings, failures);
     }
 
     public async Task<IReadOnlyList<MarketAcquisitionListing>> FetchListingsAsync(
@@ -78,35 +115,57 @@ public sealed class UniversalisMarketAcquisitionPlanSource : IMarketAcquisitionL
             listingsElement.ValueKind != JsonValueKind.Array)
             throw new InvalidOperationException("Universalis response did not include a listings array.");
 
-        var listings = new List<MarketAcquisitionListing>();
-        foreach (var listingElement in listingsElement.EnumerateArray())
+        var listings = listingsElement.EnumerateArray().Select(listingElement => new MarketAcquisitionListing
         {
-            var listingId = RequiredString(listingElement, "listingID");
-            var worldName = RequiredString(listingElement, "worldName");
-            var retainerName = RequiredString(listingElement, "retainerName");
-            var retainerId = RequiredString(listingElement, "retainerID");
-            var lastReviewTime = RequiredLong(listingElement, "lastReviewTime");
-
-            listings.Add(new MarketAcquisitionListing
-            {
-                ItemId = itemId,
-                ListingId = listingId,
-                WorldName = worldName,
-                WorldId = RequiredUInt(listingElement, "worldID"),
-                RetainerName = retainerName,
-                RetainerId = retainerId,
-                Quantity = RequiredUInt(listingElement, "quantity"),
-                UnitPrice = RequiredUInt(listingElement, "pricePerUnit"),
-                IsHq = RequiredBool(listingElement, "hq"),
-                LastReviewTimeUtc = DateTimeOffset.FromUnixTimeSeconds(lastReviewTime),
-            });
-        }
+            ItemId = itemId,
+            ListingId = RequiredString(listingElement, "listingID"),
+            WorldName = RequiredString(listingElement, "worldName"),
+            WorldId = RequiredUInt(listingElement, "worldID"),
+            RetainerName = RequiredString(listingElement, "retainerName"),
+            RetainerId = RequiredString(listingElement, "retainerID"),
+            Quantity = RequiredUInt(listingElement, "quantity"),
+            UnitPrice = RequiredUInt(listingElement, "pricePerUnit"),
+            IsHq = RequiredBool(listingElement, "hq"),
+            LastReviewTimeUtc = DateTimeOffset.FromUnixTimeSeconds(RequiredLong(listingElement, "lastReviewTime")),
+        }).ToArray();
 
         return listings;
     }
 
+    private static MarketAcquisitionListing ToListing(uint itemId, UniversalisListingResponse value) => new()
+    {
+        ItemId = itemId,
+        ListingId = Required(value.ListingId, "listingID"),
+        WorldName = Required(value.WorldName, "worldName"),
+        WorldId = value.WorldId,
+        RetainerName = Required(value.RetainerName, "retainerName"),
+        RetainerId = Required(value.RetainerId, "retainerID"),
+        Quantity = value.Quantity,
+        UnitPrice = value.UnitPrice,
+        IsHq = value.IsHq,
+        LastReviewTimeUtc = DateTimeOffset.FromUnixTimeSeconds(value.LastReviewTime),
+    };
+
+    private static string Required(string? value, string field) => string.IsNullOrWhiteSpace(value)
+        ? throw new InvalidOperationException($"Universalis listing field {field} was empty.")
+        : value;
+
     private static string NormalizeRegion(string region) =>
         region.Trim().Replace(' ', '-');
+
+    private sealed record UniversalisItemResponse(
+        [property: JsonPropertyName("listings")] IReadOnlyList<UniversalisListingResponse> Listings);
+
+    private sealed record UniversalisListingResponse(
+        [property: JsonPropertyName("listingID")] string? ListingId,
+        [property: JsonPropertyName("worldName")] string? WorldName,
+        [property: JsonPropertyName("worldID")] uint WorldId,
+        [property: JsonPropertyName("retainerName")] string? RetainerName,
+        [property: JsonPropertyName("retainerID")] string? RetainerId,
+        [property: JsonPropertyName("quantity")] uint Quantity,
+        [property: JsonPropertyName("pricePerUnit")] uint UnitPrice,
+        [property: JsonPropertyName("hq")] bool IsHq,
+        [property: JsonPropertyName("lastReviewTime")] long LastReviewTime);
 
     private static async Task<UniversalisMarketListingsHttpException> CreateHttpExceptionAsync(
         HttpResponseMessage response,

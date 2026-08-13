@@ -140,29 +140,70 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
             }
 
             var fetched = 0;
-            using var concurrency = new SemaphoreSlim(request.MaxConcurrency, request.MaxConcurrency);
-            var fetchTasks = fetch.Select(async target =>
+            if (fetch.Count > 0 && listingSource is IMarketAcquisitionBulkListingSource bulkSource)
             {
-                await concurrency.WaitAsync(cancellationToken).ConfigureAwait(false);
                 try
                 {
-                    await FetchOneAsync(request, target, visible, cancellationToken).ConfigureAwait(false);
+                    var bulk = await bulkSource.FetchListingsBulkAsync(
+                        request.Region,
+                        fetch.Select(target => target.ItemId).ToArray(),
+                        request.ListingLimit,
+                        cancellationToken).ConfigureAwait(false);
+                    foreach (var target in fetch)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (bulk.ListingsByItemId.TryGetValue(target.ItemId, out var listings))
+                            StoreListings(target, visible, listings);
+                        else
+                            StoreFailure(target, visible, bulk.FailuresByItemId.GetValueOrDefault(target.ItemId) ??
+                                "Bulk market evidence omitted the requested item.");
+                        PublishFetchProgress();
+                    }
                 }
-                finally
+                catch (OperationCanceledException)
                 {
-                    concurrency.Release();
-                    var completed = Interlocked.Increment(ref fetched);
-                    PublishState(signature, previous, visible.Values, new(
-                        OutfitterMarketDiscoveryStage.Fetching,
-                        completed,
-                        fetch.Count,
-                        $"Fetched {completed} of {fetch.Count} missing or stale market entries.",
-                        utcNow(),
-                        visible.Values.Where(value => value.RetryAfterUtc is not null).Select(value => value.RetryAfterUtc).Min()));
+                    throw;
                 }
-            }).ToArray();
-            if (fetchTasks.Length > 0)
-                await Task.WhenAll(fetchTasks).ConfigureAwait(false);
+                catch (Exception exception)
+                {
+                    foreach (var target in fetch)
+                    {
+                        StoreFailure(target, visible, exception.Message);
+                        PublishFetchProgress();
+                    }
+                }
+            }
+            else
+            {
+                using var concurrency = new SemaphoreSlim(request.MaxConcurrency, request.MaxConcurrency);
+                var fetchTasks = fetch.Select(async target =>
+                {
+                    await concurrency.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        await FetchOneAsync(request, target, visible, cancellationToken).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        concurrency.Release();
+                        PublishFetchProgress();
+                    }
+                }).ToArray();
+                if (fetchTasks.Length > 0)
+                    await Task.WhenAll(fetchTasks).ConfigureAwait(false);
+            }
+
+            void PublishFetchProgress()
+            {
+                var completed = Interlocked.Increment(ref fetched);
+                PublishState(signature, previous, visible.Values, new(
+                    OutfitterMarketDiscoveryStage.Fetching,
+                    completed,
+                    fetch.Count,
+                    $"Fetched {completed} of {fetch.Count} missing or stale market entries.",
+                    utcNow(),
+                    visible.Values.Where(value => value.RetryAfterUtc is not null).Select(value => value.RetryAfterUtc).Min()));
+            }
 
             PublishState(signature, previous, visible.Values, new(
                 OutfitterMarketDiscoveryStage.Merging,
@@ -261,36 +302,7 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
                 target.ItemId,
                 Math.Clamp(request.ListingLimit, 1, 100),
                 cancellationToken).ConfigureAwait(false);
-            var capturedAt = utcNow();
-            var valid = NormalizeListings(listings
-                .Where(listing => listing.ItemId == target.ItemId && listing.Quantity > 0 && listing.UnitPrice > 0)
-                .OrderBy(listing => listing.UnitPrice)
-                .ThenBy(listing => listing.IsHq)
-                .ThenBy(listing => listing.WorldName, StringComparer.Ordinal)
-                .ThenBy(listing => listing.ListingId, StringComparer.Ordinal)
-                .ToArray());
-            var sourceRevision = Revision(valid);
-            var evidenceListings = valid.Select(listing => new OutfitterMarketListingEvidence(
-                target.ItemId,
-                listing.IsHq ? EquipmentQuality.High : EquipmentQuality.Normal,
-                listing.ListingId,
-                listing.WorldName,
-                listing.WorldId,
-                listing.RetainerName,
-                listing.RetainerId,
-                listing.Quantity,
-                listing.UnitPrice,
-                listing.LastReviewTimeUtc,
-                capturedAt,
-                sourceRevision)).ToArray();
-            var evidence = new OutfitterMarketItemEvidence(
-                target.ItemId,
-                evidenceListings.Length == 0 ? OutfitterMarketEvidenceItemStatus.Missing : OutfitterMarketEvidenceItemStatus.Fresh,
-                evidenceListings,
-                capturedAt,
-                sourceRevision);
-            cache.Store(target.Key, evidence);
-            visible[target.ItemId] = evidence;
+            StoreListings(target, visible, listings);
         }
         catch (OperationCanceledException)
         {
@@ -298,25 +310,65 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
         }
         catch (Exception exception)
         {
-            var retryAfter = exception is UniversalisMarketListingsHttpException universalis && universalis.RetryAfterUtc is { } providerRetry
-                ? providerRetry
-                : utcNow().AddSeconds(15);
-            if (target.Stale is not null)
-            {
-                var stale = target.Stale with
-                {
-                    Status = OutfitterMarketEvidenceItemStatus.StaleUsable,
-                    Diagnostic = $"Refresh failed: {exception.Message}",
-                    RetryAfterUtc = retryAfter,
-                };
-                cache.Store(target.Key, stale);
-                visible[target.ItemId] = stale;
-                return;
-            }
-            var failure = Failed(target.ItemId, utcNow(), exception.Message, retryAfter);
-            cache.Store(target.Key, failure);
-            visible[target.ItemId] = failure;
+            StoreFailure(target, visible, exception.Message,
+                exception is UniversalisMarketListingsHttpException universalis ? universalis.RetryAfterUtc : null);
         }
+    }
+
+    private void StoreListings(
+        (uint ItemId, OutfitterMarketEvidenceCacheKey Key, OutfitterMarketItemEvidence? Stale) target,
+        ConcurrentDictionary<uint, OutfitterMarketItemEvidence> visible,
+        IReadOnlyList<MarketAcquisitionListing> listings)
+    {
+        var capturedAt = utcNow();
+        var valid = NormalizeListings(listings
+            .Where(listing => listing.ItemId == target.ItemId && listing.Quantity > 0 && listing.UnitPrice > 0)
+            .OrderBy(listing => listing.UnitPrice)
+            .ThenBy(listing => listing.IsHq)
+            .ThenBy(listing => listing.WorldName, StringComparer.Ordinal)
+            .ThenBy(listing => listing.ListingId, StringComparer.Ordinal)
+            .ToArray());
+        var sourceRevision = Revision(valid);
+        var evidenceListings = valid.Select(listing => new OutfitterMarketListingEvidence(
+            target.ItemId,
+            listing.IsHq ? EquipmentQuality.High : EquipmentQuality.Normal,
+            listing.ListingId,
+            listing.WorldName,
+            listing.WorldId,
+            listing.RetainerName,
+            listing.RetainerId,
+            listing.Quantity,
+            listing.UnitPrice,
+            listing.LastReviewTimeUtc,
+            capturedAt,
+            sourceRevision)).ToArray();
+        var evidence = new OutfitterMarketItemEvidence(
+            target.ItemId,
+            evidenceListings.Length == 0 ? OutfitterMarketEvidenceItemStatus.Missing : OutfitterMarketEvidenceItemStatus.Fresh,
+            evidenceListings,
+            capturedAt,
+            sourceRevision);
+        cache.Store(target.Key, evidence);
+        visible[target.ItemId] = evidence;
+    }
+
+    private void StoreFailure(
+        (uint ItemId, OutfitterMarketEvidenceCacheKey Key, OutfitterMarketItemEvidence? Stale) target,
+        ConcurrentDictionary<uint, OutfitterMarketItemEvidence> visible,
+        string diagnostic,
+        DateTimeOffset? providerRetry = null)
+    {
+        var retryAfter = providerRetry ?? utcNow().AddSeconds(15);
+        var failure = target.Stale is null
+            ? Failed(target.ItemId, utcNow(), diagnostic, retryAfter)
+            : target.Stale with
+            {
+                Status = OutfitterMarketEvidenceItemStatus.StaleUsable,
+                Diagnostic = $"Refresh failed: {diagnostic}",
+                RetryAfterUtc = retryAfter,
+            };
+        cache.Store(target.Key, failure);
+        visible[target.ItemId] = failure;
     }
 
     private async Task EnsurePublishedLoadedAsync(CancellationToken cancellationToken)

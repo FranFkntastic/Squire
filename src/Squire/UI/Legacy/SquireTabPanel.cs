@@ -62,6 +62,7 @@ internal sealed class SquireTabPanel : IDisposable
     private EquipmentInstanceFingerprint? focusedItem;
     private bool showBatchOnly;
     private int hiddenBatchCount;
+    private bool showSnapshotDiagnostics;
     private DateTimeOffset nextAutomaticRefreshAt = DateTimeOffset.MinValue;
     private volatile bool automaticRefreshRequested;
     private string automaticRefreshTrigger = "Automatic refresh";
@@ -246,7 +247,7 @@ internal sealed class SquireTabPanel : IDisposable
         if (analysis is null)
             return;
         DrawSummary(analysis);
-        DrawDiagnostics(analysis);
+        DrawSnapshotState(analysis);
         ImGui.Separator();
         ImGui.SetNextItemWidth(280);
         if (ImGui.InputTextWithHint("##SquireSearch", "Search item, location, or reason", ref search, 160))
@@ -417,9 +418,11 @@ internal sealed class SquireTabPanel : IDisposable
             var executable = analysis.Candidates.Count(candidate => candidate.IsExecutable);
             if (!runActive)
             {
-                status = analysis.IsActionable
-                    ? $"Complete snapshot; {executable} executable candidate(s)."
-                    : "Snapshot is incomplete; actions are blocked.";
+                status = snapshot.Identity.Scope is null
+                    ? "Waiting for an active character."
+                    : analysis.IsActionable
+                        ? $"Complete snapshot; {executable} executable candidate(s)."
+                        : "Snapshot is incomplete; actions are blocked.";
             }
             reconciliationNotice = reconciliation?.RemovedReasons.Count > 0
                 ? $"{trigger} removed {reconciliation.RemovedReasons.Count} stale cleanup-batch item(s): {string.Join(" ", reconciliation.RemovedReasons.Take(3))}"
@@ -450,6 +453,59 @@ internal sealed class SquireTabPanel : IDisposable
         ImGui.TextUnformatted($"Captured: {snapshot.Identity.CapturedAt.LocalDateTime:G}");
         ImGui.TextUnformatted($"Unlocked jobs: {snapshot.Jobs.Count(job => job.IsUnlocked == true)} | Valid gearsets: {snapshot.Gearsets.Count(set => set.IsValid)} | Items: {snapshot.Instances.Count}");
     }
+
+    private void DrawSnapshotState(SquireAnalysis value)
+    {
+        var incomplete = value.Snapshot.Diagnostics.Components
+            .Where(component => component.Status != Franthropy.Dalamud.Characters.SnapshotComponentStatus.Complete)
+            .ToArray();
+        if (incomplete.Length == 0)
+        {
+            showSnapshotDiagnostics = false;
+            return;
+        }
+
+        var waitingForCharacter = value.Snapshot.Identity.Scope is null;
+        var title = waitingForCharacter
+            ? "Waiting for an active character"
+            : "Equipment snapshot incomplete";
+        var detail = waitingForCharacter
+            ? "Squire will resume equipment analysis automatically when character data becomes available."
+            : $"{incomplete.Length} data source(s) need attention. Cleanup stays blocked until Squire can verify them.";
+        DalamudUiChrome.DrawCallout(
+            "SquireSnapshotState",
+            title,
+            detail,
+            SquireUiTheme.Current,
+            waitingForCharacter ? DalamudUiTone.Neutral : DalamudUiTone.Warning,
+            () =>
+            {
+                var label = showSnapshotDiagnostics
+                    ? "Hide diagnostic details##SquireSnapshotDiagnostics"
+                    : "Show diagnostic details##SquireSnapshotDiagnostics";
+                if (DalamudUiControls.Button(
+                        label,
+                        SquireUiTheme.Current,
+                        DalamudUiTone.Neutral,
+                        quiet: true))
+                    ToggleSnapshotDiagnostics();
+                RegisterLastControl(
+                    "squire.diagnostics.toggle",
+                    showSnapshotDiagnostics ? "Hide snapshot diagnostic details" : "Show snapshot diagnostic details",
+                    AgentBridgeUiControlKind.Toggle,
+                    true,
+                    showSnapshotDiagnostics,
+                    null,
+                    ToggleSnapshotDiagnostics);
+            });
+        if (showSnapshotDiagnostics)
+        {
+            ImGui.Spacing();
+            DrawDiagnostics(value);
+        }
+    }
+
+    private void ToggleSnapshotDiagnostics() => showSnapshotDiagnostics = !showSnapshotDiagnostics;
 
     private static void DrawDiagnostics(SquireAnalysis value)
     {
@@ -771,7 +827,14 @@ internal sealed class SquireTabPanel : IDisposable
         ImGui.TextColored(MarketMafiosoUiTheme.Header, "Cleanup batch authorization");
         ImGui.TextUnformatted($"Selected: {selections.Count} | Expert Delivery: {selections.Count(pair => pair.Value == SquireDisposition.ExpertDelivery)} | Desynthesize: {selections.Count(pair => pair.Value == SquireDisposition.Desynthesize)} | Vendor: {selections.Count(pair => pair.Value == SquireDisposition.VendorSell)} | Discard: {selections.Count(pair => pair.Value == SquireDisposition.Discard)}");
         if (!value.Snapshot.Diagnostics.IsComplete)
-            ImGui.TextColored(MarketMafiosoUiTheme.Error, "Execution blocked: snapshot is incomplete.");
+        {
+            var blockText = value.Snapshot.Identity.Scope is null
+                ? "Cleanup is unavailable while character data is unavailable."
+                : "Execution blocked: snapshot is incomplete.";
+            ImGui.TextColored(
+                value.Snapshot.Identity.Scope is null ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Error,
+                blockText);
+        }
         if (hiddenBatchCount > 0 && !showBatchOnly)
             ImGui.TextColored(MarketMafiosoUiTheme.Error, $"Execution blocked: {hiddenBatchCount} cleanup-batch item(s) are hidden by the current filters. Enable 'Show batch only' to inspect the complete batch.");
         var running = activeRun is { IsCompleted: false };

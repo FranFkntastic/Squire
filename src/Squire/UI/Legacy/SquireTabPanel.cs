@@ -49,6 +49,9 @@ internal sealed class SquireTabPanel : IDisposable
     private readonly SquireInventoryChangeMonitor inventoryChangeMonitor;
     private readonly MinerBotanistAdvisorSession advisorSession;
     private readonly MinerBotanistAdvisorPanel advisorPanel;
+    private readonly IOutfitterRetainerMetadataSource retainerMetadataSource;
+    private readonly OutfitterTargetCatalog outfitterTargetCatalog = new();
+    private IReadOnlyList<OutfitterTarget> outfitterTargets = [];
     private readonly SquireWorkspaceState workspaceState;
     private readonly SquireSettingsPanel settingsPanel;
     private readonly OutfitterPassiveCraftComposition? passiveCraftComposition;
@@ -102,6 +105,7 @@ internal sealed class SquireTabPanel : IDisposable
         this.actionAdapter = actionAdapter;
         this.capabilitySource = capabilitySource;
         this.reviewRegistry = reviewRegistry;
+        this.retainerMetadataSource = retainerMetadataSource;
         this.diagnosticDirectory = diagnosticDirectory;
         this.uiStateCapture = uiStateCapture;
         resolveItemName = itemId =>
@@ -134,10 +138,7 @@ internal sealed class SquireTabPanel : IDisposable
             advisorSession,
             reviewRegistry,
             marketListingSource,
-            () => new OutfitterTargetCatalog().Build(
-                snapshotSource.Capture(),
-                new Dictionary<ulong, CachedRetainer>(),
-                retainerMetadataSource.ReadAll()),
+            () => outfitterTargets,
             captureAdvisorCharacter,
             resolveAcquisitionRegion,
             transfer => stageOutfitterTransfer?.Invoke(transfer));
@@ -552,6 +553,10 @@ internal sealed class SquireTabPanel : IDisposable
         {
             var previousAnalysis = analysis;
             var snapshot = snapshotSource.Capture();
+            outfitterTargets = outfitterTargetCatalog.Build(
+                snapshot,
+                new Dictionary<ulong, CachedRetainer>(),
+                retainerMetadataSource.ReadAll());
             var policy = CreateProtectionPolicy(snapshot.Identity.Scope?.LocalContentId);
             var capabilities = capabilitySource.Capture();
             var inputSignature = SquireAnalysisInputSignature.Create(snapshot, capabilities, policy);

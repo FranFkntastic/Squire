@@ -20,7 +20,10 @@ public sealed record RenderedRetainerIdentityObservation(
     string RetainerName,
     uint ClassJobId,
     uint Level,
-    string Diagnostic);
+    string Diagnostic,
+    int? AverageItemLevel = null,
+    int? Gathering = null,
+    int? Perception = null);
 
 public sealed record RenderedRetainerEquipmentScanObservation(
     RenderedEquipmentScanStatus Status,
@@ -95,7 +98,12 @@ public static class RenderedRetainerEquipmentEvidenceAssembler
             equipmentScan.TotalSlots <= 0 ||
             equipmentScan.CompletedSlots != equipmentScan.TotalSlots ||
             equipmentScan.Observations.Count != equipmentScan.TotalSlots ||
-            equipmentScan.Observations.Any(value => value.Item is not { Status: RenderedItemDetailStatus.Complete }) ||
+            equipmentScan.Observations.Any(value => value.Status switch
+            {
+                RenderedEquipmentSlotObservationStatus.Equipped => value.Item is not { Status: RenderedItemDetailStatus.Complete },
+                RenderedEquipmentSlotObservationStatus.Empty => value.Item is not null,
+                _ => true,
+            }) ||
             equipmentScan.Observations.Select(value => value.PositionKey).Distinct(StringComparer.Ordinal).Count() != equipmentScan.TotalSlots)
         {
             return Failure(RenderedRetainerEquipmentEvidenceStatus.Incomplete, target, identity,

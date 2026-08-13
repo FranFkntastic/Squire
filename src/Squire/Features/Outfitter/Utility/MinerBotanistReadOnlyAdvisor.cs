@@ -26,6 +26,8 @@ public sealed record MinerBotanistReadOnlyAdvice(
 {
     internal IReadOnlyDictionary<EquipmentOfferAllocationKey, OutfitterCraftAdvisorOffer> CraftOffersByAllocation { get; init; } =
         new Dictionary<EquipmentOfferAllocationKey, OutfitterCraftAdvisorOffer>();
+
+    internal PlayerAdvisorBaseline? Baseline { get; init; }
 }
 
 public sealed record MinerBotanistOwnedItemEvidence(
@@ -186,7 +188,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
                 null,
                 ownedPositions,
                 1,
-                family.VectorFromDefinition(ownedProfile),
+                family.VectorFromDefinition(ownedDefinition, ownedProfile),
                 0,
                 null,
                 null,
@@ -247,7 +249,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
                     listing.ListingId,
                     positions,
                     listing.Quantity,
-                    family.VectorFromDefinition(profileForQuality),
+                    family.VectorFromDefinition(definition, profileForQuality),
                     listing.UnitPriceGil,
                     listing.WorldName,
                     null,
@@ -275,7 +277,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
                 null,
                 positions,
                 1,
-                family.VectorFromDefinition(statProfile),
+                family.VectorFromDefinition(vendor.Definition, statProfile),
                 price,
                 null,
                 vendor.Key.SourceCatalogKey,
@@ -386,6 +388,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
                 : "Upgrade options are ready. The recommendation is the least expensive no-loss improvement found.")
         {
             CraftOffersByAllocation = craftOffersByAllocation,
+            Baseline = baseline,
         };
     }
 

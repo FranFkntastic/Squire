@@ -19,6 +19,7 @@ public enum RenderedEquipmentScanStatus
 public enum RenderedEquipmentSlotObservationStatus
 {
     Equipped,
+    Empty,
 }
 
 public sealed record RenderedEquipmentSlotObservation(
@@ -54,6 +55,7 @@ public sealed class RenderedCharacterEquipmentScanCoordinator
     private DateTimeOffset hoverStartedAt;
     private DateTimeOffset candidateStartedAt;
     private string? candidateSignature;
+    private string addonName = "Character";
     private RenderedEquipmentScanStatus status = RenderedEquipmentScanStatus.Idle;
     private string diagnostic = "Equipment scan has not started.";
 
@@ -63,9 +65,14 @@ public sealed class RenderedCharacterEquipmentScanCoordinator
         this.observationTimeout = observationTimeout ?? TimeSpan.FromSeconds(2);
     }
 
-    public RenderedEquipmentScanProgress Begin(AgentBridgeRenderedUiSnapshot snapshot)
+    public RenderedEquipmentScanProgress Begin(
+        AgentBridgeRenderedUiSnapshot snapshot,
+        string addonName = "Character")
     {
-        var layout = RenderedCharacterEquipmentLayoutParser.Parse(snapshot);
+        if (string.IsNullOrWhiteSpace(addonName))
+            throw new ArgumentException("A rendered addon name is required.", nameof(addonName));
+        this.addonName = addonName;
+        var layout = RenderedCharacterEquipmentLayoutParser.Parse(snapshot, addonName);
         observations.Clear();
         index = 0;
         candidateSignature = null;
@@ -92,15 +99,41 @@ public sealed class RenderedCharacterEquipmentScanCoordinator
         return Snapshot();
     }
 
+    /// <summary>
+    /// Records a truthful empty slot only after the UI adapter has proven itemId == 0 in the
+    /// exact rendered surface's equipped container. A missing or incomplete tooltip must never
+    /// call this path.
+    /// </summary>
+    public RenderedEquipmentScanProgress MarkEmpty(string nodePath)
+    {
+        if (!string.Equals(addonName, "RetainerCharacter", StringComparison.Ordinal))
+            return Fail("Explicit empty-slot proof is restricted to the rendered RetainerCharacter surface.");
+        if (status != RenderedEquipmentScanStatus.ReadyToHover || CurrentTarget() is not { } target ||
+            !string.Equals(target.NodePath, nodePath, StringComparison.Ordinal))
+            return Fail("The UI adapter did not prove emptiness for the requested rendered equipment slot.");
+
+        observations.Add(new(
+            target.PositionKey,
+            target.Slot,
+            RenderedEquipmentSlotObservationStatus.Empty,
+            null));
+        return AdvanceAfterObservation();
+    }
+
+    public RenderedEquipmentScanProgress RejectExternalObservation(string diagnostic) =>
+        Fail(string.IsNullOrWhiteSpace(diagnostic)
+            ? "The UI adapter rejected the rendered equipment observation."
+            : diagnostic);
+
     public RenderedEquipmentScanProgress Observe(AgentBridgeRenderedUiSnapshot snapshot, DateTimeOffset nowUtc)
     {
         if (status != RenderedEquipmentScanStatus.Observing || CurrentTarget() is not { } target)
             return Snapshot();
 
-        var layout = RenderedCharacterEquipmentLayoutParser.Parse(snapshot);
+        var layout = RenderedCharacterEquipmentLayoutParser.Parse(snapshot, addonName);
         if (layout.Status != RenderedEquipmentLayoutStatus.Complete ||
             !layout.Slots.Any(value => value.PositionKey == target.PositionKey && value.NodePath == target.NodePath))
-            return Fail("The rendered Character equipment layout changed during observation.");
+            return Fail($"The rendered {addonName} equipment layout changed during observation.");
 
         if (nowUtc - hoverStartedAt < settleWindow)
             return Snapshot();
@@ -130,6 +163,11 @@ public sealed class RenderedCharacterEquipmentScanCoordinator
             target.Slot,
             RenderedEquipmentSlotObservationStatus.Equipped,
             item));
+        return AdvanceAfterObservation();
+    }
+
+    private RenderedEquipmentScanProgress AdvanceAfterObservation()
+    {
         index++;
         candidateSignature = null;
         if (index >= targets.Count)

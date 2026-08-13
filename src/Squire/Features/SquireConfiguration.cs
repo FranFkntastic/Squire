@@ -24,6 +24,13 @@ public sealed class SquireConfiguration
     public string SelectedWorkspace { get; set; } = "Cleanup";
     public string OutfitterAdvisorContext { get; set; } = "OrdinaryResourceBenchmark";
     public int OutfitterAdvisorContextDefaultVersion { get; set; }
+    public Dictionary<string, string> OutfitterRetainerVentureItemNames { get; set; } = new();
+    public Dictionary<string, uint> OutfitterRetainerVentureTaskIds { get; set; } = new();
+    public Dictionary<string, string> OutfitterRetainerEquipmentEvidenceJson { get; set; } = new();
+    public Dictionary<string, string> OutfitterRetainerVentureOutcomeEvidenceJson { get; set; } = new();
+    public List<OutfitterPortfolioTargetConfiguration> OutfitterPortfolioTargets { get; set; } = [];
+    public string? OutfitterEquipmentExecutionStateJson { get; set; }
+    public string? OutfitterPortfolioAcquisitionRecoveryStateJson { get; set; }
     public bool ShowProtected { get; set; }
     public bool ShowNonEquipment { get; set; }
     public string Search { get; set; } = string.Empty;
@@ -53,6 +60,15 @@ public sealed class SquireConfiguration
     public bool PauseQuestionable { get; set; } = true;
     public bool PauseArtisan { get; set; } = true;
     public bool CloseSafeUserMenus { get; set; } = true;
+}
+
+[Serializable]
+public sealed class OutfitterPortfolioTargetConfiguration
+{
+    public string TargetKey { get; set; } = string.Empty;
+    public bool Included { get; set; } = true;
+    public int Priority { get; set; } = 100;
+    public string ProgressionHorizon { get; set; } = "CurrentContent";
 }
 
 [Serializable]

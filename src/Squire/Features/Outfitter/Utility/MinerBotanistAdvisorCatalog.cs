@@ -112,7 +112,7 @@ public sealed class MinerBotanistAdvisorCatalog
                     vendor.SourceLabel,
                     vendor.UnitPriceGil,
                     Quality: EquipmentQuality.Normal,
-                    SourceCatalogKey: $"vendor:{vendor.ShopId}:{vendor.VendorId}:{vendor.TerritoryId}:{definition.ItemId}"));
+                    SourceCatalogKey: OutfitterGilVendorSelectionIdentity.Encode(vendors.CatalogVersion, vendor)));
         }
 
         var diagnostic =
@@ -137,9 +137,9 @@ public sealed class MinerBotanistAdvisorCatalog
     };
 
     internal static bool HasRelevantCompleteProfile(EquipmentItemDefinition definition, IAdvisorStatFamily family) =>
-        Relevant(definition.StatProfile, family) || Relevant(definition.HighQualityStatProfile, family);
+        Relevant(definition, definition.StatProfile, family) || Relevant(definition, definition.HighQualityStatProfile, family);
 
-    private static bool Relevant(EquipmentStatProfile? profile, IAdvisorStatFamily family) =>
-        profile is { IsComplete: true } && family.VectorFromDefinition(profile).Components.Any(value => value.Units > 0);
+    private static bool Relevant(EquipmentItemDefinition definition, EquipmentStatProfile? profile, IAdvisorStatFamily family) =>
+        profile is { IsComplete: true } && family.VectorFromDefinition(definition, profile).Components.Any(value => value.Units > 0);
 
 }

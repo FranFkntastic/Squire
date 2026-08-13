@@ -337,6 +337,19 @@ public sealed unsafe class DalamudPlayerAdvisorBaselineSource : IOutfitterTarget
         try
         {
             snapshot = snapshotSource.Capture();
+            if (target.Kind == OutfitterTargetKind.Retainer)
+            {
+                if (target is not { RetainerMetadata: { } metadata, RetainerObjective: { } objective,
+                        RetainerEquipmentEvidence: { Equipment.Count: > 0 } equipment })
+                    return PlayerAdvisorBaselineAssembler.Failure(
+                        PlayerAdvisorBaselineStatus.Incomplete,
+                        "A complete rendered retainer identity, worn-equipment scan, and venture objective are required.",
+                        snapshot);
+                var retainerFamily = new RetainerAdvisorStatFamily(objective, metadata.ClassJobId,
+                    equipment.Equipment.Count(value => PlayerAdvisorEquippedSlotMap.All.Any(position => position.PositionKey == value.PositionKey)));
+                var lookup = new LuminaRenderedEquipmentDefinitionLookup(dataManager);
+                return RetainerAdvisorBaselineAssembler.Assemble(snapshot, target, retainerFamily, lookup.FindByExactName);
+            }
             var resolution = SavedGearsetTargetResolver.Resolve(snapshot, target);
             var classJobId = resolution.Fingerprint?.ClassJobId ?? target.Job?.ClassJobId;
             var family = classJobId is null ? null : AdvisorStatFamilies.Resolve(classJobId.Value);

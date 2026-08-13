@@ -93,6 +93,25 @@ public sealed class RenderedRetainerEquipmentEvidenceAssemblerTests
         Assert.Equal(2, result.Equipment.Count);
     }
 
+    [Fact]
+    public void Assemble_preserves_an_explicit_empty_slot_as_truthful_evidence()
+    {
+        var scan = CompleteScan() with
+        {
+            Observations =
+            [
+                Equipped("main-hand", EquipmentSlot.MainHand),
+                new("head", EquipmentSlot.Head, RenderedEquipmentSlotObservationStatus.Empty, null),
+            ],
+        };
+
+        var result = RenderedRetainerEquipmentEvidenceAssembler.Assemble(Target(), Identity(), scan);
+
+        Assert.Equal(RenderedRetainerEquipmentEvidenceStatus.Complete, result.Status);
+        var empty = Assert.Single(result.Equipment, value => value.Status == RenderedEquipmentSlotObservationStatus.Empty);
+        Assert.Null(empty.Item);
+    }
+
     private static OutfitterTarget Target() => new(
         "retainer:42",
         OutfitterTargetKind.Retainer,

@@ -5,6 +5,7 @@ using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Dalamud.Plugin.Services;
 using Lumina.Excel.Sheets;
 
@@ -19,7 +20,50 @@ public sealed record OutfitterGilVendorOffer(
     string TerritoryName,
     uint UnitPriceGil)
 {
-    public string SourceLabel => $"{VendorName} · {TerritoryName}";
+    public string SourceLabel => $"{VendorName} / {TerritoryName}";
+}
+
+public sealed record OutfitterGilVendorSelectionIdentity(
+    string CatalogVersion,
+    uint ItemId,
+    uint ShopId,
+    uint VendorId,
+    string VendorName,
+    uint TerritoryId,
+    string TerritoryName,
+    uint UnitPriceGil)
+{
+    private const string Prefix = "vendor-v2:";
+
+    public static string Encode(string catalogVersion, OutfitterGilVendorOffer offer)
+    {
+        var identity = new OutfitterGilVendorSelectionIdentity(
+            catalogVersion, offer.ItemId, offer.ShopId, offer.VendorId, offer.VendorName,
+            offer.TerritoryId, offer.TerritoryName, offer.UnitPriceGil);
+        return Prefix + Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(identity)))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    }
+
+    public static bool TryDecode(string? sourceCatalogKey, out OutfitterGilVendorSelectionIdentity? identity)
+    {
+        identity = null;
+        if (string.IsNullOrWhiteSpace(sourceCatalogKey) || !sourceCatalogKey.StartsWith(Prefix, StringComparison.Ordinal))
+            return false;
+        try
+        {
+            var payload = sourceCatalogKey[Prefix.Length..].Replace('-', '+').Replace('_', '/');
+            payload = payload.PadRight(payload.Length + ((4 - payload.Length % 4) % 4), '=');
+            identity = JsonSerializer.Deserialize<OutfitterGilVendorSelectionIdentity>(
+                Convert.FromBase64String(payload));
+            return identity is not null && identity.ItemId != 0 && identity.ShopId != 0 && identity.VendorId != 0 &&
+                   identity.TerritoryId != 0 && identity.UnitPriceGil != 0 && !string.IsNullOrWhiteSpace(identity.CatalogVersion) &&
+                   !string.IsNullOrWhiteSpace(identity.VendorName) && !string.IsNullOrWhiteSpace(identity.TerritoryName);
+        }
+        catch (Exception exception) when (exception is FormatException or JsonException)
+        {
+            return false;
+        }
+    }
 }
 
 /// <summary>

@@ -89,7 +89,7 @@ public sealed class RetainerProcurementOutcomeEvaluatorTests
     {
         var objective = Objective(RetainerProcurementProfileKind.Battle, eligibility: 1, (0, 10)) with
         {
-            IsRenderedUiComplete = false,
+            IsDefinitionComplete = false,
         };
 
         var result = RetainerProcurementOutcomeEvaluator.Evaluate(objective, new(999, 999, 999, 999));
@@ -108,5 +108,5 @@ public sealed class RetainerProcurementOutcomeEvaluatorTests
             tiers.Select(value => new RetainerYieldThreshold(value.Required, value.Quantity)).ToArray(),
             Guid.Parse("105cdb55-d6e4-4fa8-967d-5d99b637ec71"),
             new DateTimeOffset(2026, 7, 18, 5, 0, 0, TimeSpan.Zero),
-            IsRenderedUiComplete: true);
+            IsDefinitionComplete: true);
 }

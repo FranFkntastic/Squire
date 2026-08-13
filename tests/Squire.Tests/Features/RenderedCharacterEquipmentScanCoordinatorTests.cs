@@ -111,6 +111,45 @@ public sealed class RenderedCharacterEquipmentScanCoordinatorTests
         Assert.Equal(RenderedEquipmentScanStatus.Failed, coordinator.Observe(broken, Start.AddMilliseconds(350)).Status);
     }
 
+    [Fact]
+    public void Retainer_scan_accepts_explicit_empty_proof_without_a_tooltip()
+    {
+        var coordinator = Coordinator();
+        var begun = coordinator.Begin(Snapshot(addonName: "RetainerCharacter"), "RetainerCharacter");
+
+        var advanced = coordinator.MarkEmpty(begun.CurrentTarget!.NodePath);
+
+        Assert.Equal(RenderedEquipmentScanStatus.ReadyToHover, advanced.Status);
+        var empty = Assert.Single(advanced.Observations);
+        Assert.Equal(RenderedEquipmentSlotObservationStatus.Empty, empty.Status);
+        Assert.Null(empty.Item);
+        Assert.Equal("head", advanced.CurrentTarget?.PositionKey);
+    }
+
+    [Fact]
+    public void Empty_proof_must_name_the_exact_requested_rendered_node()
+    {
+        var coordinator = Coordinator();
+        coordinator.Begin(Snapshot(addonName: "RetainerCharacter"), "RetainerCharacter");
+
+        var failed = coordinator.MarkEmpty("RetainerCharacter/999/5");
+
+        Assert.Equal(RenderedEquipmentScanStatus.Failed, failed.Status);
+        Assert.Empty(failed.Observations);
+    }
+
+    [Fact]
+    public void Player_scan_cannot_use_the_retainer_empty_slot_path()
+    {
+        var coordinator = Coordinator();
+        var begun = coordinator.Begin(Snapshot());
+
+        var failed = coordinator.MarkEmpty(begun.CurrentTarget!.NodePath);
+
+        Assert.Equal(RenderedEquipmentScanStatus.Failed, failed.Status);
+        Assert.Contains("RetainerCharacter", failed.Diagnostic, StringComparison.Ordinal);
+    }
+
     private static RenderedCharacterEquipmentScanCoordinator Coordinator() =>
         new(TimeSpan.FromMilliseconds(300), TimeSpan.FromSeconds(1));
 
@@ -126,28 +165,29 @@ public sealed class RenderedCharacterEquipmentScanCoordinatorTests
 
     private static AgentBridgeRenderedUiSnapshot Snapshot(
         AgentBridgeRenderedTextNode[]? itemTexts = null,
-        IReadOnlyList<AgentBridgeRenderedNodeSnapshot>? characterNodes = null) =>
+        IReadOnlyList<AgentBridgeRenderedNodeSnapshot>? characterNodes = null,
+        string addonName = "Character") =>
         new(Start,
         [
-            new("Character", true, true, true, 200, [], Nodes: characterNodes ?? CharacterNodes()),
+            new(addonName, true, true, true, 200, [], Nodes: characterNodes ?? CharacterNodes(addonName)),
             new("ItemDetail", true, true, itemTexts is { Length: > 0 }, 117, itemTexts ?? []),
         ]);
 
     private static AgentBridgeRenderedTextNode Text(string path, string text) =>
         new(path, 0, 3, text, 0, 0, 100, 20);
 
-    private static AgentBridgeRenderedNodeSnapshot[] CharacterNodes()
+    private static AgentBridgeRenderedNodeSnapshot[] CharacterNodes(string addonName = "Character")
     {
         var result = new List<AgentBridgeRenderedNodeSnapshot>();
         var leftIds = new[] { 49u, 51u, 52u, 54u, 53u, 55u, 62u };
         var rightIds = new[] { 50u, 56u, 57u, 58u, 59u, 60u, 61u };
         for (var index = 0; index < leftIds.Length; index++)
-            result.Add(Node(leftIds[index], 1369, index == 0 ? 157 : 218 + ((index - 1) * 47)));
+            result.Add(Node(addonName, leftIds[index], 1369, index == 0 ? 157 : 218 + ((index - 1) * 47)));
         for (var index = 0; index < rightIds.Length; index++)
-            result.Add(Node(rightIds[index], 1631, 218 + (index * 47)));
+            result.Add(Node(addonName, rightIds[index], 1631, 218 + (index * 47)));
         return result.ToArray();
     }
 
-    private static AgentBridgeRenderedNodeSnapshot Node(uint parentId, int left, int top) =>
-        new($"Character/{parentId}/5", 5, 1007, 17, left, top, left + 44, top + 44, true);
+    private static AgentBridgeRenderedNodeSnapshot Node(string addonName, uint parentId, int left, int top) =>
+        new($"{addonName}/{parentId}/5", 5, 1007, 17, left, top, left + 44, top + 44, true);
 }

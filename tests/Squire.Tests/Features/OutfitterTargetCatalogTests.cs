@@ -149,7 +149,7 @@ public sealed class OutfitterTargetCatalogTests
         var observed = Assert.Single(withBaseline, value => value.Key == "retainer:101");
         Assert.Same(renderedEvidence, observed.RetainerEquipmentEvidence);
         Assert.False(observed.IsReady);
-        Assert.Contains("outcome profile", observed.Diagnostic);
+        Assert.Contains("targeted-procurement venture", observed.Diagnostic);
     }
 
     [Fact]

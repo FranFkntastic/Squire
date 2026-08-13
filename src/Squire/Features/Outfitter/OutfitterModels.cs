@@ -1,6 +1,7 @@
 using Franthropy.Dalamud.Characters;
 using Franthropy.Dalamud.Equipment;
 using MarketMafioso.Squire.Observation;
+using MarketMafioso.Squire.Outfitter.Utility;
 
 namespace MarketMafioso.Squire.Outfitter;
 
@@ -25,7 +26,8 @@ public sealed record OutfitterTarget(
     bool IsCurrentCharacter = false,
     bool IsReady = true,
     string? Diagnostic = null,
-    RenderedRetainerEquipmentEvidence? RetainerEquipmentEvidence = null);
+    RenderedRetainerEquipmentEvidence? RetainerEquipmentEvidence = null,
+    RetainerProcurementObjective? RetainerObjective = null);
 
 public sealed record OutfitterRetainerMetadata(
     ulong OwnerContentId,

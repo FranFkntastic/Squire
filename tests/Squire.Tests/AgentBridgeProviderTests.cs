@@ -11,6 +11,7 @@ public sealed class AgentBridgeProviderTests
     [Fact]
     public void Provider_advertises_only_its_registered_review_surface()
     {
+        Assert.Equal(12, SquireBridgeSchema.CurrentVersion);
         var opened = false;
         var provider = new SquireBridgeProvider(
             () => new SquireBridgeTruth(
@@ -30,7 +31,24 @@ public sealed class AgentBridgeProviderTests
                     "active-loadout", "ActiveLoadout", "Current equipped job", 4, 3,
                     null, null, null, null, null,
                     "quality:hq", true, 2,
-                    new SquireBridgeSettingsTruth("safety", true, true, false, true, 30, false, false, true, true, 90, false, true, true, true, true, false, false, false))),
+                    new SquireBridgeSettingsTruth("safety", true, true, false, true, 30, false, false, true, true, 90, false, true, true, true, true, false, false, false),
+                    PortfolioAcquisitionStatus: "AwaitingAcquisition",
+                    PortfolioAcquisitionLineCount: 3,
+                    PortfolioMarketLineCount: 1,
+                    PortfolioVendorActionCount: 1,
+                    PortfolioCraftHandoffCount: 1,
+                    PortfolioAcquisitionAuthoritySha256: "portfolio-sha",
+                    PortfolioAcquisitionDiagnostic: "Exact market lots are staged.",
+                    PortfolioAcquisitionLines:
+                    [
+                        new("market-line", "Market", "StagedForReview", "active-loadout", "choice-a", 100, "Market item", 1, "Review in Market Workbench", null),
+                        new("vendor-line", "Vendor", "Pending", "retainer:1", "choice-b", 200, "Vendor item", 2, "Acquire from Vendor in Ul'dah", null),
+                        new("craft-line", "Craft", "Exported", "gearset:4", "choice-c", 0, "2 recipe Artisan list", 3, "Copy reviewed Artisan list", "receipt-sha"),
+                    ],
+                    PortfolioAcquisitionStageReachable: false,
+                    PortfolioAcquisitionResumeReachable: true,
+                    PortfolioVendorConfirmReachable: true,
+                    PortfolioArtisanExportReachable: true)),
             () => opened = true,
             () => { },
             new AgentBridgeUiReviewRegistry());
@@ -58,6 +76,22 @@ public sealed class AgentBridgeProviderTests
         Assert.Equal("quality:hq", truth.Product.CandidateFilterExpression);
         Assert.True(truth.Product.CandidateFilterValid);
         Assert.Equal(2, truth.Product.VisibleCandidateCount);
+        Assert.Equal("AwaitingAcquisition", truth.Product.PortfolioAcquisitionStatus);
+        Assert.Equal(3, truth.Product.PortfolioAcquisitionLineCount);
+        Assert.Equal(1, truth.Product.PortfolioMarketLineCount);
+        Assert.Equal(1, truth.Product.PortfolioVendorActionCount);
+        Assert.Equal(1, truth.Product.PortfolioCraftHandoffCount);
+        Assert.Equal("portfolio-sha", truth.Product.PortfolioAcquisitionAuthoritySha256);
+        Assert.Equal("Exact market lots are staged.", truth.Product.PortfolioAcquisitionDiagnostic);
+        var acquisitionLines = Assert.IsAssignableFrom<IReadOnlyList<SquireBridgePortfolioAcquisitionLineTruth>>(
+            truth.Product.PortfolioAcquisitionLines);
+        Assert.Equal(["Market", "Vendor", "Craft"], acquisitionLines.Select(value => value.SourceKind));
+        Assert.Equal(["StagedForReview", "Pending", "Exported"], acquisitionLines.Select(value => value.Status));
+        Assert.Equal("receipt-sha", acquisitionLines[2].Receipt);
+        Assert.False(truth.Product.PortfolioAcquisitionStageReachable);
+        Assert.True(truth.Product.PortfolioAcquisitionResumeReachable);
+        Assert.True(truth.Product.PortfolioVendorConfirmReachable);
+        Assert.True(truth.Product.PortfolioArtisanExportReachable);
     }
 
     [Fact]

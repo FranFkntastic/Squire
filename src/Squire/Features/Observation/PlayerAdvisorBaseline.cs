@@ -21,6 +21,7 @@ public enum PlayerAdvisorBaselineTargetKind
 {
     ActiveLoadout,
     SavedGearset,
+    Retainer,
 }
 
 public sealed record PlayerAdvisorBaselineTarget(
@@ -326,7 +327,7 @@ internal static class PlayerAdvisorBaselineAssembler
             snapshot.Identity.CapturedAt > provenance.CompletedAtUtc ||
             !ComponentIsComplete(snapshot, "identity") ||
             !ComponentIsComplete(snapshot, "equipped") ||
-            baseline.Target is { Kind: PlayerAdvisorBaselineTargetKind.SavedGearset } target &&
+            baseline.Target is { Kind: not PlayerAdvisorBaselineTargetKind.ActiveLoadout } target &&
             (string.IsNullOrWhiteSpace(target.Key) || string.IsNullOrWhiteSpace(target.AuthorityFingerprint)))
         {
             diagnostic = "The player advisor baseline does not match one complete equipment snapshot identity.";

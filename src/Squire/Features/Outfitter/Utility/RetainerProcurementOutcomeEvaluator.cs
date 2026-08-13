@@ -25,7 +25,8 @@ public sealed record RetainerProcurementObjective(
     IReadOnlyList<RetainerYieldThreshold> YieldThresholds,
     Guid EvidenceGenerationId,
     DateTimeOffset CapturedAtUtc,
-    bool IsRenderedUiComplete);
+    bool IsDefinitionComplete,
+    RenderedRetainerVentureOutcomeEvidence? RenderedOutcomeEvidence = null);
 
 public enum RetainerProcurementOutcomeStatus
 {
@@ -53,8 +54,8 @@ public sealed record RetainerQualityOutcomeComparison(
 /// <summary>
 /// Evaluates only deterministic targeted-procurement outcomes. Battle retainers use average item
 /// level for both eligibility and yield. Gathering retainers use Gathering for eligibility and
-/// Perception for yield; GP is intentionally ignored. Thresholds are observed venture evidence,
-/// not patch-specific constants embedded in the profile.
+/// Perception for yield; GP is intentionally ignored. Thresholds are version-bound installed-game
+/// definitions, not patch-specific constants embedded in the profile.
 /// </summary>
 public static class RetainerProcurementOutcomeEvaluator
 {
@@ -66,14 +67,14 @@ public static class RetainerProcurementOutcomeEvaluator
         ArgumentNullException.ThrowIfNull(stats);
 
         if (string.IsNullOrWhiteSpace(objective.VentureKey) || objective.EvidenceGenerationId == Guid.Empty ||
-            objective.CapturedAtUtc == default || !objective.IsRenderedUiComplete ||
+            objective.CapturedAtUtc == default || !objective.IsDefinitionComplete ||
             objective.RequiredEligibilityStat < 0 ||
             objective.YieldThresholds.Count == 0 ||
             objective.YieldThresholds.Any(value => value.RequiredStat < 0 || value.Quantity <= 0) ||
             objective.YieldThresholds.GroupBy(value => value.RequiredStat).Any(group => group.Count() > 1))
         {
             return new(RetainerProcurementOutcomeStatus.InvalidEvidence, false, 0, 0, 0, null,
-                "The rendered venture requirement or yield thresholds are incomplete or inconsistent.");
+                "The installed-game venture requirement or yield thresholds are incomplete or inconsistent.");
         }
 
         var eligibilityStat = objective.Profile switch

@@ -112,6 +112,14 @@ public sealed class Plugin : IDalamudPlugin
         var ruleStore = new SquireCleanupRuleStore(configuration);
         var vnavmesh = new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(pluginInterface, Log));
         var lifestream = new LifestreamIpc(pluginInterface, Log);
+        var renderedCharacterUi = new DalamudRenderedCharacterUiProbe(GameGui, DataManager);
+        var retainerUiPreparation = new DalamudRetainerUiPreparation(
+            commands,
+            lifestream,
+            renderedCharacterUi.CaptureRetainerUi,
+            renderedCharacterUi.TryActivateRenderedSummoningBell);
+        var retainerObservationController = new RetainerTargetObservationController(
+            new DalamudRetainerTargetObservationRuntime(retainerUiPreparation, renderedCharacterUi));
         uiStateCapture = new UiStateCaptureService(
             AddonLifecycle,
             framework,
@@ -148,10 +156,19 @@ public sealed class Plugin : IDalamudPlugin
             Path.Combine(configDirectory, "squire-logs"),
             uiStateCapture,
             GameInventory,
+            PlayerState,
             DataManager,
+            GameGui,
             listingSource,
             new DalamudPlayerAdvisorBaselineSource(snapshotSource, PlayerState, DataManager),
             new AutoRetainerOutfitterMetadataSource(pluginInterface, Log),
+            retainerObservationController,
+            () => new(
+                PlayerState.IsLoaded ? PlayerState.ContentId : 0,
+                PlayerState.IsLoaded ? PlayerState.CharacterName.ToString() : string.Empty,
+                PlayerState.IsLoaded && PlayerState.HomeWorld.IsValid
+                    ? PlayerState.HomeWorld.Value.Name.ToString()
+                    : string.Empty),
             advisorCharacterSource.Capture,
             () => configuration.ActiveMarketAcquisitionRequestDocument?.Region
                   ?? configuration.ActiveMarketAcquisitionClaim?.Region
@@ -197,7 +214,11 @@ public sealed class Plugin : IDalamudPlugin
         ECommonsMain.Dispose();
     }
 
-    private void OpenWindow() => window.IsOpen = true;
+    private void OpenWindow()
+    {
+        featurePanel.NotifyWindowOpened();
+        window.IsOpen = true;
+    }
 
     private void OpenSettingsWindow()
     {
@@ -247,7 +268,7 @@ public sealed class Plugin : IDalamudPlugin
     });
 
     private SquireBridgeTruth CreateBridgeTruth() => new(
-        5,
+        SquireBridgeSchema.CurrentVersion,
         configuration.PluginInstanceId,
         Environment.ProcessId,
         GetType().Assembly.GetName().Version?.ToString() ?? "unknown",

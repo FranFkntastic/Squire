@@ -253,7 +253,7 @@ internal sealed class OutfitterPassiveCraftOfferService
                 null,
                 MinerBotanistReadOnlyAdvisor.Positions(definition),
                 1,
-                family.VectorFromDefinition(profile),
+                family.VectorFromDefinition(definition, profile),
                 source.TotalGil,
                 worlds.Length == 1 ? worlds[0].WorldName : null,
                 vendors.Length == 1

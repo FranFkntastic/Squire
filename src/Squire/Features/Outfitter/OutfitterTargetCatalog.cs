@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using Franthropy.Dalamud.Equipment;
 using MarketMafioso.Squire.Observation;
+using MarketMafioso.Squire.Outfitter.Utility;
 
 namespace MarketMafioso.Squire.Outfitter;
 
@@ -13,7 +14,8 @@ public sealed class OutfitterTargetCatalog
         CharacterEquipmentSnapshot snapshot,
         IReadOnlyDictionary<ulong, CachedRetainer> retainers,
         IReadOnlyList<OutfitterRetainerMetadata>? autoRetainerMetadata = null,
-        IReadOnlyDictionary<string, RenderedRetainerEquipmentEvidence>? renderedRetainerEquipment = null)
+        IReadOnlyDictionary<string, RenderedRetainerEquipmentEvidence>? renderedRetainerEquipment = null,
+        IReadOnlyDictionary<string, RetainerProcurementObjective>? retainerObjectives = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(retainers);
@@ -80,8 +82,41 @@ public sealed class OutfitterTargetCatalog
             var targetKey = $"retainer:{retainerId}";
             RenderedRetainerEquipmentEvidence? renderedEvidence = null;
             renderedRetainerEquipment?.TryGetValue(targetKey, out renderedEvidence);
-            var diagnostic = renderedEvidence?.Status == RenderedRetainerEquipmentEvidenceStatus.Complete
-                ? "The rendered equipment baseline is proven. Squire still needs a supported retainer outcome profile before this target can be advised."
+            RetainerProcurementObjective? objective = null;
+            retainerObjectives?.TryGetValue(targetKey, out objective);
+            var profileMatches = objective is not null && job is not null && objective.Profile switch
+            {
+                RetainerProcurementProfileKind.Battle => job.Discipline == EquipmentDiscipline.Combat,
+                RetainerProcurementProfileKind.Gathering => job.Discipline == EquipmentDiscipline.Gatherer &&
+                    job.ClassJobId != AdvisorStatFamilies.FisherClassJobId,
+                _ => false,
+            };
+            var ready = isCurrentCharacter && metadata is not null &&
+                renderedEvidence?.Status == RenderedRetainerEquipmentEvidenceStatus.Complete &&
+                renderedEvidence.Equipment.Count(value => PlayerAdvisorEquippedSlotMap.All.Any(position =>
+                    position.PositionKey == value.PositionKey)) == PlayerAdvisorEquippedSlotMap.All.Count &&
+                objective is { IsDefinitionComplete: true } &&
+                RetainerVentureOutcomeCalibration.IsValid(objective) &&
+                objective.RenderedOutcomeEvidence is { } calibrated &&
+                string.Equals(calibrated.TargetKey, targetKey, StringComparison.Ordinal) &&
+                calibrated.OwnerContentId == metadata!.OwnerContentId &&
+                calibrated.RetainerId == metadata.RetainerId &&
+                string.Equals(calibrated.RetainerName, metadata.RetainerName, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(calibrated.OwnerCharacterName, metadata.OwnerCharacterName, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(calibrated.OwnerHomeWorld, metadata.OwnerHomeWorld, StringComparison.OrdinalIgnoreCase) &&
+                profileMatches;
+            var diagnostic = ready
+                ? "Rendered worn-equipment evidence and the rendered venture outcome calibration are complete and owner-bound."
+                : objective is { IsDefinitionComplete: true } && !RetainerVentureOutcomeCalibration.IsValid(objective)
+                    ? "The installed venture definition is ready. Open its current outcome and verify the rendered quantity before evaluation."
+                : renderedEvidence?.Status == RenderedRetainerEquipmentEvidenceStatus.Complete && objective is null
+                    ? "The rendered equipment baseline is proven. Choose a targeted-procurement venture to bind its current installed-game eligibility and yield thresholds."
+                : objective is not null && !profileMatches
+                    ? "The installed-game venture profile does not match this retainer's job family."
+                : !isCurrentCharacter
+                    ? retainer is null
+                        ? "Load this retainer's owner before evaluating; there is no inventory snapshot and worn equipment must share that owner's authority."
+                        : "Load this retainer's owner before evaluating so owned inventory and worn equipment share one authority."
                 : (retainer, metadata) switch
             {
                 (null, not null) => "AutoRetainer knows this retainer's job and level, but Squire has no inventory snapshot. Visit the retainer or run a retainer refresh to cache its bags.",
@@ -99,9 +134,10 @@ public sealed class OutfitterTargetCatalog
                 OwnerCharacterName: ownerName,
                 OwnerHomeWorld: ownerWorld,
                 IsCurrentCharacter: isCurrentCharacter,
-                IsReady: false,
+                IsReady: ready,
                 Diagnostic: diagnostic,
-                RetainerEquipmentEvidence: renderedEvidence));
+                RetainerEquipmentEvidence: renderedEvidence,
+                RetainerObjective: objective));
         }
 
         return targets;

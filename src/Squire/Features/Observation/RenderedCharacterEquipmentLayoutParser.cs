@@ -33,14 +33,20 @@ public sealed record RenderedCharacterEquipmentLayout(
 /// </summary>
 public static class RenderedCharacterEquipmentLayoutParser
 {
-    public static RenderedCharacterEquipmentLayout Parse(AgentBridgeRenderedUiSnapshot snapshot)
+    public static RenderedCharacterEquipmentLayout Parse(
+        AgentBridgeRenderedUiSnapshot snapshot,
+        string addonName = "Character")
     {
-        var addon = snapshot.Addons.FirstOrDefault(value => string.Equals(value.Name, "Character", StringComparison.Ordinal));
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (string.IsNullOrWhiteSpace(addonName))
+            throw new ArgumentException("A rendered addon name is required.", nameof(addonName));
+
+        var addon = snapshot.Addons.FirstOrDefault(value => string.Equals(value.Name, addonName, StringComparison.Ordinal));
         if (addon is not { Present: true, Ready: true, Visible: true } || addon.Nodes == null)
-            return Unavailable("The rendered Character equipment pane is unavailable.");
+            return Unavailable($"The rendered {addonName} equipment pane is unavailable.");
 
         var candidates = addon.Nodes
-            .Where(IsEquipmentDragDrop)
+            .Where(value => IsEquipmentDragDrop(value, addonName))
             .GroupBy(value => (value.Left + value.Right) / 2)
             .Select(group => group.OrderBy(value => value.Top).ToArray())
             .Where(IsRegularEquipmentColumn)
@@ -59,7 +65,7 @@ public static class RenderedCharacterEquipmentLayoutParser
             !Aligned(left[1], right[0]) ||
             !Aligned(left[5], right[4]) ||
             right[6].Top <= left[5].Top)
-            return Ambiguous("Rendered Character slot columns do not match the supported equipment-pane topology.");
+            return Ambiguous($"Rendered {addonName} slot columns do not match the supported equipment-pane topology.");
 
         // When present, Left[6] is facewear: it is a cosmetic Character control, not a stat-bearing equipment slot.
         var mapped = new[]
@@ -78,15 +84,15 @@ public static class RenderedCharacterEquipmentLayoutParser
             Target("ring-right", EquipmentSlot.Ring, right[5]),
             Target("soul-crystal", EquipmentSlot.SoulCrystal, right[6]),
         };
-        return new(RenderedEquipmentLayoutStatus.Complete, mapped, "Rendered Character equipment layout is complete.");
+        return new(RenderedEquipmentLayoutStatus.Complete, mapped, $"Rendered {addonName} equipment layout is complete.");
     }
 
-    private static bool IsEquipmentDragDrop(AgentBridgeRenderedNodeSnapshot node)
+    private static bool IsEquipmentDragDrop(AgentBridgeRenderedNodeSnapshot node, string addonName)
     {
         var width = node.Right - node.Left;
         var height = node.Bottom - node.Top;
         return node.ComponentType == 17 && node.RespondsToMouse &&
-               node.NodePath.StartsWith("Character/", StringComparison.Ordinal) &&
+               node.NodePath.StartsWith($"{addonName}/", StringComparison.Ordinal) &&
                node.NodePath.EndsWith("/5", StringComparison.Ordinal) &&
                width is >= 36 and <= 60 && height is >= 36 and <= 60;
     }

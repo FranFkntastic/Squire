@@ -47,22 +47,26 @@ public sealed record AdvisorWorkspacePresentation(
 
 public static class AdvisorWorkspacePresentationResolver
 {
-    public static bool MayPresentFrontier(AdvisorCharacterSubject subject, uint? evaluatedClassJobId) =>
+    public static bool MayPresentFrontier(
+        AdvisorCharacterSubject subject,
+        uint? evaluatedClassJobId,
+        OutfitterTarget? target = null) =>
         subject.IsAvailable &&
         subject.ClassJobId is { } activeClassJobId &&
         evaluatedClassJobId == activeClassJobId &&
-        AdvisorStatFamilies.Resolve(activeClassJobId) is not null;
+        AdvisorStatFamilies.Resolve(target, activeClassJobId) is not null;
 
     public static AdvisorWorkspacePresentation Resolve(
         AdvisorCharacterSubject subject,
         MinerBotanistAdvisorSessionState state,
         bool hasFrontier,
-        bool deterministicReviewAvailable = false)
+        bool deterministicReviewAvailable = false,
+        OutfitterTarget? target = null)
     {
         ArgumentNullException.ThrowIfNull(subject);
         ArgumentNullException.ThrowIfNull(state);
 
-        var family = subject.ClassJobId is { } classJobId ? AdvisorStatFamilies.Resolve(classJobId) : null;
+        var family = subject.ClassJobId is { } classJobId ? AdvisorStatFamilies.Resolve(target, classJobId) : null;
         var isFisher = subject.ClassJobId == AdvisorStatFamilies.FisherClassJobId;
         var characterAvailable = subject.IsAvailable && subject.ClassJobId is not null;
         var jobLabel = characterAvailable && !string.IsNullOrWhiteSpace(subject.JobLabel)
@@ -73,7 +77,7 @@ public static class AdvisorWorkspacePresentationResolver
         var staleJobEvidence = characterAvailable && family is not null && evaluatedClassJobId is { } evaluated &&
             evaluated != subject.ClassJobId;
         var context = ResolveContext(family, state, staleJobEvidence);
-        var canEvaluate = characterAvailable && family is not null && !state.IsBusy;
+        var canEvaluate = characterAvailable && family is not null && target is not { IsReady: false } && !state.IsBusy;
         var primaryLabel = state.Advice is null || staleJobEvidence ? "Evaluate gear upgrades" : "Refresh evaluation";
         var reviewTargetLabel = string.IsNullOrWhiteSpace(subject.ReviewTargetLabel)
             ? $"the active {jobLabel}"
@@ -81,7 +85,7 @@ public static class AdvisorWorkspacePresentationResolver
         var supportedFrontier = hasFrontier && characterAvailable && family is not null;
         var showRetained = state.AdviceIsRetained && supportedFrontier;
         var showRecovery = !supportedFrontier && (!characterAvailable || family is null);
-        var recovery = Recovery(characterAvailable, isFisher, jobLabel);
+        var recovery = Recovery(characterAvailable, isFisher, jobLabel, target);
         var showIntroduction = !supportedFrontier && !showRecovery &&
             (state.Stage == MinerBotanistAdvisorSessionStage.Idle || staleJobEvidence);
         var status = showRecovery || staleJobEvidence
@@ -129,7 +133,11 @@ public static class AdvisorWorkspacePresentationResolver
     private static string FamilyLabel(IAdvisorStatFamily? family, bool isFisher) =>
         family?.FamilyLabel ?? (isFisher ? "Fisher" : "Unsupported job");
 
-    private static (string? Title, string? Message) Recovery(bool available, bool isFisher, string jobLabel)
+    private static (string? Title, string? Message) Recovery(
+        bool available,
+        bool isFisher,
+        string jobLabel,
+        OutfitterTarget? target)
     {
         if (!available)
         {
@@ -142,6 +150,14 @@ public static class AdvisorWorkspacePresentationResolver
             return (
                 "Fisher is outside the supported scope",
                 "Squire does not evaluate Fisher equipment. This is a terminal scope boundary, not an incomplete scan.");
+        }
+        if (target is { Kind: OutfitterTargetKind.Retainer })
+        {
+            return (
+                $"{target.Name} needs evidence",
+                string.IsNullOrWhiteSpace(target.Diagnostic)
+                    ? "Observe this retainer's worn equipment and choose a targeted-procurement venture before evaluation."
+                    : target.Diagnostic);
         }
         return (
             $"{jobLabel} is not supported yet",
@@ -158,6 +174,8 @@ public static class AdvisorWorkspacePresentationResolver
         "Scouting melee DPS" => $"Compare equipped {jobLabel} gear with owned, vendor, crafted, and market options using the conservative scouting model.",
         "Healer" => $"Compare equipped {jobLabel} gear with owned, vendor, crafted, and market options using the conservative healer model.",
         "Magical ranged DPS" => $"Compare equipped {jobLabel} gear with owned, vendor, crafted, and market options using the conservative magical-ranged model.",
+        "Battle retainer" => $"Compare {jobLabel} worn gear with owned, vendor, crafted, and market options by the selected venture's item-level outcome.",
+        "Gathering retainer" => $"Compare {jobLabel} worn gear with owned, vendor, crafted, and market options by the selected venture's Gathering and Perception thresholds.",
         _ => "Squire will evaluate the active job only when an authoritative model is available.",
     };
 

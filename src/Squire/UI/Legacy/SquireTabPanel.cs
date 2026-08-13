@@ -26,6 +26,7 @@ using MarketMafioso.Diagnostics;
 using MarketMafioso.Squire.Outfitter.Utility;
 using MarketMafioso.Squire.Outfitter.Acquisition;
 using MarketMafioso.Squire.Outfitter.Crafting;
+using MarketMafioso.Squire.Outfitter.Portfolio;
 using LuminaItem = Lumina.Excel.Sheets.Item;
 
 namespace MarketMafioso.Windows.Squire;
@@ -51,7 +52,16 @@ internal sealed class SquireTabPanel : IDisposable
     private readonly MinerBotanistAdvisorPanel advisorPanel;
     private readonly IOutfitterRetainerMetadataSource retainerMetadataSource;
     private readonly OutfitterTargetCatalog outfitterTargetCatalog = new();
+    private readonly RetainerVentureObjectiveCatalog retainerVentureCatalog;
+    private readonly DalamudRetainerVentureOutcomeProbe retainerVentureOutcomeProbe;
+    private readonly DalamudRenderedCharacterUiProbe renderedCharacterUiProbe;
+    private readonly RetainerTargetObservationController retainerObservationController;
+    private readonly Func<RetainerObservationOwnerScope> captureRetainerOwner;
+    private readonly Dictionary<string, RenderedRetainerEquipmentEvidence> renderedRetainerEquipment = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, RetainerProcurementObjective> retainerObjectives = new(StringComparer.Ordinal);
     private IReadOnlyList<OutfitterTarget> outfitterTargets = [];
+    private CharacterEquipmentSnapshot? outfitterTargetSnapshot;
+    private string? consumedRetainerEvidenceFingerprint;
     private readonly SquireWorkspaceState workspaceState;
     private readonly SquireSettingsPanel settingsPanel;
     private readonly OutfitterPassiveCraftComposition? passiveCraftComposition;
@@ -93,10 +103,14 @@ internal sealed class SquireTabPanel : IDisposable
         string diagnosticDirectory,
         UiStateCaptureService uiStateCapture,
         IGameInventory gameInventory,
+        IPlayerState playerState,
         IDataManager dataManager,
+        IGameGui gameGui,
         IMarketAcquisitionListingSource marketListingSource,
         IPlayerAdvisorBaselineSource playerAdvisorBaselineSource,
         IOutfitterRetainerMetadataSource retainerMetadataSource,
+        RetainerTargetObservationController retainerObservationController,
+        Func<RetainerObservationOwnerScope> captureRetainerOwner,
         Func<AdvisorCharacterSubject> captureAdvisorCharacter,
         Func<string> resolveAcquisitionRegion,
         Func<bool> getAgentBridgeAudit,
@@ -108,6 +122,11 @@ internal sealed class SquireTabPanel : IDisposable
         this.capabilitySource = capabilitySource;
         this.reviewRegistry = reviewRegistry;
         this.retainerMetadataSource = retainerMetadataSource;
+        this.retainerObservationController = retainerObservationController;
+        this.captureRetainerOwner = captureRetainerOwner;
+        retainerVentureCatalog = new(dataManager);
+        retainerVentureOutcomeProbe = new(gameGui);
+        renderedCharacterUiProbe = new(gameGui, dataManager);
         this.diagnosticDirectory = diagnosticDirectory;
         this.uiStateCapture = uiStateCapture;
         resolveItemName = itemId =>
@@ -135,6 +154,29 @@ internal sealed class SquireTabPanel : IDisposable
             marketListingSource,
             Path.Combine(diagnosticDirectory, "outfitter-market-evidence.json"),
             craftDiscovery);
+        RestoreRetainerEquipmentEvidence();
+        var activePlayerActivationProof = new DalamudActivePlayerActivationProofSource(
+            playerState,
+            playerAdvisorBaselineSource);
+        var equipmentExecution = new PortfolioEquipmentExecutionCoordinator(
+            config,
+            new DalamudPortfolioEquipmentMoveRuntime(
+                playerState,
+                () => retainerObservationController.Snapshot().Evidence ??
+                      renderedRetainerEquipment.Values.OrderByDescending(value => value.CapturedAtUtc).FirstOrDefault(),
+                key => outfitterTargets.SingleOrDefault(value =>
+                           value.Kind == OutfitterTargetKind.Retainer &&
+                           string.Equals(value.Key, key, StringComparison.Ordinal)) is { } target &&
+                       RenderedRetainerIdentityParser.Parse(
+                           renderedCharacterUiProbe.CaptureRetainerUi(),
+                           target,
+                           captureRetainerOwner()).Status == RenderedRetainerIdentityStatus.Complete),
+            new DalamudSavedGearsetActivationRuntime(),
+            activePlayerActivationProof.Capture,
+            key => retainerObservationController.Snapshot().Evidence is { } live &&
+                       string.Equals(live.TargetKey, key, StringComparison.Ordinal)
+                ? live
+                : renderedRetainerEquipment.GetValueOrDefault(key));
         advisorPanel = new(
             config,
             advisorSession,
@@ -143,6 +185,15 @@ internal sealed class SquireTabPanel : IDisposable
             () => outfitterTargets,
             captureAdvisorCharacter,
             resolveAcquisitionRegion,
+            equipmentExecution,
+            new(
+                BeginRetainerObservation,
+                retainerObservationController.Snapshot,
+                () => retainerObservationController.Cancel(),
+                ResolveRetainerVenture,
+                SelectRetainerVenture,
+                CalibrateRetainerVentureOutcome,
+                key => config.Squire.OutfitterRetainerVentureItemNames.GetValueOrDefault(key) ?? string.Empty),
             transfer => stageOutfitterTransfer?.Invoke(transfer));
         workspaceState = new SquireWorkspaceState(config);
         ruleStore = new SquireCleanupRuleStore(config);
@@ -191,6 +242,12 @@ internal sealed class SquireTabPanel : IDisposable
     }
 
     public void OpenSettings() => workspaceState.OpenSettings();
+
+    public void NotifyWindowOpened()
+    {
+        if (advisorPanel.NotifyWindowOpened())
+            workspaceState.Select(SquireWorkspaces.Outfitter);
+    }
 
 #if DEBUG
     public void OpenSyntheticAdvisorReview()
@@ -249,12 +306,197 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void SelectWorkspace(string workspace)
     {
+        var returningToOutfitter = workspace == SquireWorkspaces.Outfitter &&
+            workspaceState.SelectedWorkspace != SquireWorkspaces.Outfitter;
         workspaceState.Select(workspace);
+        if (returningToOutfitter)
+            _ = advisorPanel.NotifyWindowOpened();
     }
 
     private void DrawOutfitter()
     {
+        EnsureOutfitterTargets();
         advisorPanel.Draw();
+    }
+
+    private void EnsureOutfitterTargets()
+    {
+        if (outfitterTargetSnapshot is not null)
+            return;
+        try
+        {
+            outfitterTargetSnapshot = snapshotSource.Capture();
+            RebuildOutfitterTargets();
+        }
+        catch (Exception exception)
+        {
+            operationalStatus.ReportFailure(
+                SquireOperationalStatusSource.Refresh,
+                $"Upgrade target discovery failed safely: {exception.Message}",
+                DateTimeOffset.UtcNow);
+        }
+    }
+
+    private void RebuildOutfitterTargets()
+    {
+        if (outfitterTargetSnapshot is null)
+            return;
+        var metadata = retainerMetadataSource.ReadAll();
+        var discovered = outfitterTargetCatalog.Build(
+            outfitterTargetSnapshot,
+            new Dictionary<ulong, CachedRetainer>(),
+            metadata,
+            renderedRetainerEquipment,
+            retainerObjectives);
+        var reconciledVentures = RetainerVentureIntentReconciler.Reconcile(
+            discovered,
+            config.Squire.OutfitterRetainerVentureItemNames,
+            config.Squire.OutfitterRetainerVentureTaskIds,
+            ResolveRetainerVenture);
+        retainerObjectives.Clear();
+        foreach (var objective in reconciledVentures.Objectives)
+        {
+            var calibrated = objective.Value;
+            if (config.Squire.OutfitterRetainerVentureOutcomeEvidenceJson.GetValueOrDefault(objective.Key) is { } json)
+            {
+                try
+                {
+                    var evidence = JsonConvert.DeserializeObject<RenderedRetainerVentureOutcomeEvidence>(json);
+                    if (evidence is not null)
+                    {
+                        var candidate = calibrated with { RenderedOutcomeEvidence = evidence };
+                        if (RetainerVentureOutcomeCalibration.IsValid(candidate))
+                            calibrated = candidate;
+                    }
+                }
+                catch (JsonException)
+                {
+                    // Changed or corrupt calibration evidence never upgrades a target to ready.
+                }
+            }
+            retainerObjectives[objective.Key] = calibrated;
+        }
+        outfitterTargets = outfitterTargetCatalog.Build(
+            outfitterTargetSnapshot,
+            new Dictionary<ulong, CachedRetainer>(),
+            metadata,
+            renderedRetainerEquipment,
+            retainerObjectives);
+    }
+
+    private RetainerTargetObservationProgress BeginRetainerObservation(OutfitterTarget target)
+    {
+        retainerVentureOutcomeProbe.Invalidate();
+        var progress = retainerObservationController.Begin(target, captureRetainerOwner(), DateTimeOffset.UtcNow);
+        consumedRetainerEvidenceFingerprint = null;
+        return progress;
+    }
+
+    private void AdvanceRetainerObservation()
+    {
+        var progress = retainerObservationController.Snapshot();
+        if (progress.Status is not (RetainerTargetObservationStatus.Idle or RetainerTargetObservationStatus.Complete or
+            RetainerTargetObservationStatus.Failed or RetainerTargetObservationStatus.Cancelled))
+            progress = retainerObservationController.Advance(captureRetainerOwner(), DateTimeOffset.UtcNow);
+        if (progress is not { Status: RetainerTargetObservationStatus.Complete, Evidence: { } evidence })
+            return;
+
+        var fingerprint = $"{evidence.TargetKey}|{evidence.CapturedAtUtc:O}|{evidence.Equipment.Count}";
+        if (string.Equals(consumedRetainerEvidenceFingerprint, fingerprint, StringComparison.Ordinal))
+            return;
+        renderedRetainerEquipment[evidence.TargetKey] = evidence;
+        config.Squire.OutfitterRetainerEquipmentEvidenceJson[evidence.TargetKey] =
+            JsonConvert.SerializeObject(evidence, Formatting.None);
+        config.Save();
+        consumedRetainerEvidenceFingerprint = fingerprint;
+        RebuildOutfitterTargets();
+        advisorSession.InvalidateForPlayerStateChange();
+    }
+
+    private void RestoreRetainerEquipmentEvidence()
+    {
+        foreach (var (key, json) in config.Squire.OutfitterRetainerEquipmentEvidenceJson)
+        {
+            try
+            {
+                var evidence = JsonConvert.DeserializeObject<RenderedRetainerEquipmentEvidence>(json);
+                if (evidence is { Status: RenderedRetainerEquipmentEvidenceStatus.Complete } &&
+                    string.Equals(evidence.TargetKey, key, StringComparison.Ordinal) &&
+                    evidence.Equipment.Count == PlayerAdvisorEquippedSlotMap.All.Count)
+                    renderedRetainerEquipment[key] = evidence;
+            }
+            catch (JsonException)
+            {
+                // Corrupt compatibility evidence is ignored; live rendered observation remains authoritative.
+            }
+        }
+    }
+
+    private RetainerVentureObjectiveResolution ResolveRetainerVenture(OutfitterTarget target, string itemName)
+    {
+        if (target is not { Kind: OutfitterTargetKind.Retainer, Job: { } job, RetainerMetadata: { } metadata })
+            return new([], "Select one current-character retainer with a known battle or MIN/BTN job.");
+        return retainerVentureCatalog.Resolve(
+            itemName,
+            job.Abbreviation,
+            job.Discipline,
+            metadata.Level,
+            DateTimeOffset.UtcNow);
+    }
+
+    private void SelectRetainerVenture(OutfitterTarget target, RetainerVentureObjectiveOption option)
+    {
+        if (target.Kind != OutfitterTargetKind.Retainer || option.Objective is not { IsDefinitionComplete: true })
+            return;
+        if (retainerObjectives.GetValueOrDefault(target.Key)?.EvidenceGenerationId != option.Objective.EvidenceGenerationId)
+            config.Squire.OutfitterRetainerVentureOutcomeEvidenceJson.Remove(target.Key);
+        config.Squire.OutfitterRetainerVentureItemNames[target.Key] = option.ItemName;
+        config.Squire.OutfitterRetainerVentureTaskIds[target.Key] = option.TaskId;
+        retainerObjectives[target.Key] = option.Objective;
+        config.Save();
+        RebuildOutfitterTargets();
+        advisorSession.InvalidateForPlayerStateChange();
+    }
+
+    private RetainerVentureOutcomeCalibrationResult CalibrateRetainerVentureOutcome(OutfitterTarget target)
+    {
+        if (target.RetainerObjective is not { IsDefinitionComplete: true } objective)
+            return new(false, null, "Choose one exact targeted-procurement venture first.");
+        var itemName = config.Squire.OutfitterRetainerVentureItemNames.GetValueOrDefault(target.Key) ?? string.Empty;
+        if (target.RetainerMetadata is not { } metadata ||
+            !config.Squire.OutfitterRetainerVentureTaskIds.TryGetValue(target.Key, out var taskId))
+            return new(false, null, "The selected retainer and exact venture task identity are unavailable.");
+        var renderedIdentity = RenderedRetainerIdentityParser.Parse(
+            renderedCharacterUiProbe.CaptureRetainerUi(),
+            target,
+            captureRetainerOwner());
+        var result = retainerVentureOutcomeProbe.Capture(
+            objective,
+            itemName,
+            target.Key,
+            metadata.OwnerContentId,
+            metadata.OwnerCharacterName,
+            metadata.OwnerHomeWorld,
+            metadata.RetainerId,
+            metadata.RetainerName,
+            taskId,
+            renderedIdentity.Status == RenderedRetainerIdentityStatus.Complete,
+            renderedIdentity.CapturedAtUtc,
+            new(
+                renderedIdentity.AverageItemLevel ?? 0,
+                renderedIdentity.Gathering ?? 0,
+                renderedIdentity.Perception ?? 0,
+                0),
+            DateTimeOffset.UtcNow);
+        if (!result.Success || result.Objective?.RenderedOutcomeEvidence is not { } evidence)
+            return result;
+        config.Squire.OutfitterRetainerVentureOutcomeEvidenceJson[target.Key] =
+            JsonConvert.SerializeObject(evidence, Formatting.None);
+        retainerObjectives[target.Key] = result.Objective;
+        config.Save();
+        RebuildOutfitterTargets();
+        advisorSession.InvalidateForPlayerStateChange();
+        return result;
     }
 
     private void DrawCleanup()
@@ -525,6 +767,7 @@ internal sealed class SquireTabPanel : IDisposable
     {
         _ = operationalStatus.Current(DateTimeOffset.UtcNow);
         advisorSession.Tick();
+        AdvanceRetainerObservation();
         CompleteRefreshIfReady();
         if (automaticRefreshRequested)
             MaybeRefreshAutomatically();
@@ -562,10 +805,8 @@ internal sealed class SquireTabPanel : IDisposable
             var refreshTiming = Stopwatch.StartNew();
             var snapshot = snapshotSource.Capture();
             var snapshotMilliseconds = refreshTiming.Elapsed.TotalMilliseconds;
-            outfitterTargets = outfitterTargetCatalog.Build(
-                snapshot,
-                new Dictionary<ulong, CachedRetainer>(),
-                retainerMetadataSource.ReadAll());
+            outfitterTargetSnapshot = snapshot;
+            RebuildOutfitterTargets();
             var targetMilliseconds = refreshTiming.Elapsed.TotalMilliseconds - snapshotMilliseconds;
             var policy = CreateProtectionPolicy(snapshot.Identity.Scope?.LocalContentId);
             var capabilities = capabilitySource.Capture();
@@ -621,6 +862,10 @@ internal sealed class SquireTabPanel : IDisposable
             : operationalStatus.Current(DateTimeOffset.UtcNow);
         var displayedAnalysis = DisplayedCleanupAnalysis;
         var visibleCandidateCount = displayedAnalysis is null ? 0 : ResolveVisibleCandidates(displayedAnalysis).Length;
+        var retainerObservation = retainerObservationController.Snapshot();
+        var selectedRetainer = outfitterTargets.SingleOrDefault(target =>
+            target.Kind == OutfitterTargetKind.Retainer &&
+            string.Equals(target.Key, advisorPanel.SelectedTargetKey, StringComparison.Ordinal));
         return new(
             ResolveCleanupSurfaceState(displayedAnalysis).ToString(),
             displayedAnalysis?.Snapshot.Identity.CapturedAt,
@@ -649,7 +894,58 @@ internal sealed class SquireTabPanel : IDisposable
             ActiveCleanupWorkbench.Filter.Expression,
             ActiveCleanupWorkbench.Filter.IsValid,
             visibleCandidateCount,
-            settingsPanel.CreateBridgeTruth());
+            settingsPanel.CreateBridgeTruth(),
+            retainerObservation.Status.ToString(),
+            retainerObservation.TargetKey,
+            retainerObservation.EquipmentScan?.CompletedSlots ?? selectedRetainer?.RetainerEquipmentEvidence?.Equipment.Count ?? 0,
+            retainerObservation.EquipmentScan?.TotalSlots ?? PlayerAdvisorEquippedSlotMap.All.Count,
+            selectedRetainer?.RetainerEquipmentEvidence?.Status == RenderedRetainerEquipmentEvidenceStatus.Complete,
+            selectedRetainer?.RetainerObjective?.VentureKey,
+            selectedRetainer is null
+                ? null
+                : config.Squire.OutfitterRetainerVentureItemNames.GetValueOrDefault(selectedRetainer.Key),
+            advisorPanel.PortfolioMode,
+            advisorPanel.PortfolioBuildStage,
+            advisorPanel.PortfolioEvaluatedTargetCount,
+            advisorPanel.PortfolioPlan?.IsComplete,
+            advisorPanel.PortfolioPlan?.SelectedCandidates.Count ?? 0,
+            advisorPanel.PortfolioPlan?.AllocationConsequences.Count ?? 0,
+            advisorPanel.PortfolioPlan?.ExploredStateCount ?? 0,
+            advisorPanel.PortfolioPlan?.Diagnostic,
+            advisorPanel.EquipmentExecution?.ExecutionId,
+            advisorPanel.EquipmentExecution?.Status.ToString(),
+            advisorPanel.EquipmentExecution?.CompletedStepCount ?? 0,
+            advisorPanel.EquipmentExecution?.Steps.Count ?? 0,
+            advisorPanel.EquipmentExecution?.NextStep?.TargetKey,
+            advisorPanel.EquipmentExecution?.NextStep?.Position.ToString(),
+            advisorPanel.EquipmentExecution?.StopReason,
+            advisorPanel.PortfolioAuthority?.Fingerprint.Sha256 ?? advisorPanel.EquipmentExecution?.AuthorityFingerprint?.Sha256,
+            advisorPanel.PortfolioTargetTruth,
+            advisorPanel.PortfolioAllocationTruth,
+            advisorPanel.PortfolioHandMeDownTruth,
+            advisorPanel.EquipmentExecution?.NextStep is { } equipmentStep ? resolveItemName(equipmentStep.ExpectedAfter.ItemId) : null,
+            advisorPanel.EquipmentExecution?.NextStep?.ExpectedAfter.ItemId,
+            advisorPanel.EquipmentExecution?.NextStep?.ExpectedAfter.IsHighQuality,
+            advisorPanel.EquipmentExecution?.NextStep?.SourceItem.InstanceId,
+            advisorPanel.EquipmentExecution?.NextStep is { } activationStep
+                ? advisorPanel.EquipmentExecution.TargetActivations?.GetValueOrDefault(activationStep.TargetKey)?.Status.ToString()
+                : null,
+            selectedRetainer?.RetainerObjective is { } selectedObjective && RetainerVentureOutcomeCalibration.IsValid(selectedObjective),
+            selectedRetainer?.RetainerObjective?.RenderedOutcomeEvidence?.RenderedTextSha256,
+            advisorPanel.SelectedRetainerVentureTaskId,
+            advisorPanel.SelectedRetainerVentureTaskLabel,
+            advisorPanel.PortfolioAcquisitionStatus,
+            advisorPanel.PortfolioAcquisitionLineCount,
+            advisorPanel.PortfolioMarketLineCount,
+            advisorPanel.PortfolioVendorActionCount,
+            advisorPanel.PortfolioCraftHandoffCount,
+            advisorPanel.PortfolioAcquisitionAuthoritySha256,
+            advisorPanel.PortfolioAcquisitionDiagnostic,
+            advisorPanel.PortfolioAcquisitionLineTruth,
+            advisorPanel.PortfolioAcquisitionStageReachable,
+            advisorPanel.PortfolioAcquisitionResumeReachable,
+            advisorPanel.PortfolioVendorConfirmReachable,
+            advisorPanel.PortfolioArtisanExportReachable);
     }
 
     private static SquireCleanupSurfaceState ResolveCleanupSurfaceState(SquireAnalysis? value) =>
@@ -816,6 +1112,12 @@ internal sealed class SquireTabPanel : IDisposable
 
         analysis = refreshedAnalysis;
         lastAnalysisInputSignature = pending.InputSignature;
+        if (outfitterTargetSnapshot?.GenerationId != pending.Snapshot.GenerationId)
+        {
+            outfitterTargetSnapshot = pending.Snapshot;
+            RebuildOutfitterTargets();
+            advisorPanel.NotifyInventoryEvidenceChanged(pending.Snapshot.GenerationId.ToString("N"));
+        }
         if (pending.ReconcileSelections && sameCharacter)
         {
             var currentFingerprints = analysis.Candidates.Select(candidate => candidate.Instance.Fingerprint)
@@ -1579,6 +1881,7 @@ internal sealed class SquireTabPanel : IDisposable
     public void Dispose()
     {
         runCancellation?.Cancel();
+        advisorPanel.Dispose();
         advisorSession.Dispose();
         passiveCraftComposition?.Dispose();
         inventoryChangeMonitor.Dispose();

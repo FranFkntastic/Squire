@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Franthropy.Dalamud.Equipment;
+using MarketMafioso.Squire.Observation;
 
 namespace MarketMafioso.Squire.Outfitter.Utility;
 
@@ -100,6 +101,8 @@ public interface IAdvisorStatFamily
         IReadOnlyDictionary<EquipmentStatSemantic, int> offerBaseline,
         IReadOnlyDictionary<EquipmentStatSemantic, int> fixedStats);
     EquipmentSolverUtilityVector VectorFromDefinition(EquipmentStatProfile profile);
+    EquipmentSolverUtilityVector VectorFromDefinition(EquipmentItemDefinition definition, EquipmentStatProfile profile) =>
+        VectorFromDefinition(profile);
     bool IsDefinitionOwnedSemantic(EquipmentStatSemantic semantic) => false;
     bool TryGetNonParameterDefinitionValue(
         EquipmentStatProfile profile,
@@ -131,6 +134,21 @@ public static class AdvisorStatFamilies
 
     public static IAdvisorStatFamily? Resolve(uint classJobId) =>
         All.FirstOrDefault(family => family.SupportedClassJobIds.Contains(classJobId));
+
+    public static IAdvisorStatFamily? Resolve(OutfitterTarget? target, uint classJobId)
+    {
+        if (target is not { Kind: OutfitterTargetKind.Retainer, RetainerObjective: { } objective,
+                RetainerEquipmentEvidence: { Equipment.Count: > 0 } equipment })
+            return Resolve(classJobId);
+        var slotCount = equipment.Equipment.Count(value =>
+            PlayerAdvisorEquippedSlotMap.All.Any(position => position.PositionKey == value.PositionKey));
+        var mainHandCountsTwice = objective.Profile == RetainerProcurementProfileKind.Battle &&
+            equipment.Equipment.SingleOrDefault(value => value.PositionKey == "off-hand") is
+            { Status: RenderedEquipmentSlotObservationStatus.Empty };
+        return slotCount == PlayerAdvisorEquippedSlotMap.All.Count
+            ? new RetainerAdvisorStatFamily(objective, classJobId, slotCount, mainHandCountsTwice)
+            : null;
+    }
 
     public static string UnsupportedDiagnostic(uint classJobId) => classJobId == FisherClassJobId
         ? "Fisher is permanently unsupported and out of scope for Squire Outfitter."

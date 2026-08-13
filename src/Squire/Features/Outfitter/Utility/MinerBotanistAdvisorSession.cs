@@ -79,6 +79,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
     private IAdvisorStatFamily? resolvedFamily;
     private MinerBotanistAdvisorCatalogResult? offers;
     private IReadOnlyList<MinerBotanistOwnedItemEvidence>? ownedItemsEvidence;
+    private IReadOnlyList<MinerBotanistOwnedItemEvidence> portfolioSharedOwnedItems = [];
     private bool ownedInventoryCoverageComplete;
     private OutfitterMarketEvidenceBook? pendingCurrentEvidence;
     private OutfitterMarketEvidenceBook? pendingSolvingEvidence;
@@ -297,18 +298,56 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 
     public void Begin(AdvisorUtilityContextDescriptor context, string region)
     {
-        BeginCore(null, context, region);
+        BeginCore(null, context, region, []);
     }
 
     public void Begin(OutfitterTarget target, AdvisorUtilityContextDescriptor context, string region)
     {
         ArgumentNullException.ThrowIfNull(target);
-        BeginCore(target, context, region);
+        BeginCore(target, context, region, []);
     }
 
-    private void BeginCore(OutfitterTarget? target, AdvisorUtilityContextDescriptor context, string region)
+    internal void BeginPortfolio(
+        OutfitterTarget? target,
+        AdvisorUtilityContextDescriptor context,
+        string region,
+        IReadOnlyList<MinerBotanistOwnedItemEvidence> sharedWornItems) =>
+        BeginCore(target, context, region, sharedWornItems);
+
+    internal IReadOnlyList<MinerBotanistOwnedItemEvidence> CapturePortfolioWornItems(
+        IReadOnlyList<OutfitterTarget?> targets)
+    {
+        ArgumentNullException.ThrowIfNull(targets);
+        var result = new List<MinerBotanistOwnedItemEvidence>();
+        foreach (var target in targets)
+        {
+            var captured = target is null
+                ? baselineSource.Capture()
+                : baselineSource is IOutfitterTargetAdvisorBaselineSource targetSource
+                    ? targetSource.Capture(target)
+                    : null;
+            if (captured?.Status != PlayerAdvisorBaselineStatus.Complete)
+                continue;
+            result.AddRange(captured.EquippedSlots
+                .Where(slot => slot is { Instance: not null, Definition: not null, Quality: not null })
+                .Select(slot => new MinerBotanistOwnedItemEvidence(
+                    slot.Definition!.ItemId,
+                    slot.Quality == EquipmentQuality.High,
+                    $"Portfolio worn item from {target?.Key ?? "active-loadout"}",
+                    slot.Instance,
+                    UtilityIsExact: slot.MateriaIds.Count == 0)));
+        }
+        return result.DistinctBy(value => value.Instance!.Fingerprint, EquipmentInstanceFingerprintComparer.Instance).ToArray();
+    }
+
+    private void BeginCore(
+        OutfitterTarget? target,
+        AdvisorUtilityContextDescriptor context,
+        string region,
+        IReadOnlyList<MinerBotanistOwnedItemEvidence> sharedWornItems)
     {
         ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(sharedWornItems);
         CancelCore(MinerBotanistAdvisorSessionStage.Cancelled, "Superseded by a new advisor refresh.");
         sessionGeneration++;
         var targetKey = target?.Key ?? "active-loadout";
@@ -318,6 +357,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             ? State.Advice
             : null;
         requestedTarget = target;
+        portfolioSharedOwnedItems = sharedWornItems;
         requestedContextId = context.Id;
         if (retainedAdvice is null)
             CurrentEvidence = null;
@@ -485,7 +525,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             return;
         }
 
-        resolvedFamily = AdvisorStatFamilies.Resolve(classJobId);
+        resolvedFamily = AdvisorStatFamilies.Resolve(requestedTarget, classJobId);
         if (resolvedFamily is null)
         {
             Abstain(AdvisorStatFamilies.UnsupportedDiagnostic(classJobId));
@@ -507,7 +547,14 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         }
 
         ownedInventoryCoverageComplete = ComponentIsComplete(baseline, "armoury") && ComponentIsComplete(baseline, "inventory");
-        ownedItemsEvidence = CaptureOwnedItems(baseline);
+        var baselineFingerprints = new HashSet<EquipmentInstanceFingerprint>(
+            baseline.EquippedSlots.Where(value => value.Instance is not null).Select(value => value.Instance!.Fingerprint),
+            EquipmentInstanceFingerprintComparer.Instance);
+        ownedItemsEvidence = CaptureOwnedItems(baseline)
+            .Concat(portfolioSharedOwnedItems.Where(value => value.Instance is not null &&
+                !baselineFingerprints.Contains(value.Instance.Fingerprint)))
+            .DistinctBy(value => value.Instance!.Fingerprint, EquipmentInstanceFingerprintComparer.Instance)
+            .ToArray();
         var coverageLabel = ownedInventoryCoverageComplete
             ? "All currently equipped, armoury, bag, saddlebag, and gil-vendor options are included."
             : "Observed owned and gil-vendor options are included; paid recommendations stay disabled while owned inventory is incomplete.";
@@ -1018,7 +1065,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             return targetSource.Capture(requestedTarget);
         return PlayerAdvisorBaselineAssembler.Failure(
             PlayerAdvisorBaselineStatus.Unsupported,
-            "This Advisor baseline source cannot capture saved-gearset targets.");
+            "This Advisor baseline source cannot capture the selected Outfitter target.");
     }
 
     private static OutfitterTarget RehydrateTarget(SavedGearsetTargetFingerprint fingerprint)

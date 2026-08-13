@@ -70,6 +70,7 @@ public sealed class DalamudRenderedCharacterUiProbe
     private readonly Franthropy.Dalamud.AgentBridge.DalamudRenderedUiTextActionDispatcher renderedTextActions;
     private readonly RenderedGatheringStatsStabilizer gatheringStatsStabilizer = new(TimeSpan.FromSeconds(3));
     private readonly RenderedCharacterEquipmentScanCoordinator equipmentScan = new();
+    private readonly RenderedCharacterEquipmentScanCoordinator retainerEquipmentScan = new();
     private string? lastGearsetSelectionDiagnostic;
 
     public DalamudRenderedCharacterUiProbe(IGameGui gameGui, IDataManager dataManager)
@@ -288,30 +289,114 @@ public sealed class DalamudRenderedCharacterUiProbe
         return equipmentScan.Begin(Capture());
     }
 
-    public RenderedEquipmentScanStepResult AdvanceEquipmentScan()
+    public RenderedEquipmentScanStepResult AdvanceEquipmentScan() => AdvanceEquipmentScan(
+        equipmentScan,
+        "Character",
+        FFXIVClientStructs.FFXIV.Client.Game.InventoryType.EquippedItems,
+        Capture);
+
+    public RenderedEquipmentScanProgress CancelEquipmentScan()
     {
-        var progress = equipmentScan.Snapshot();
+        HideEquipmentTooltip("Character");
+        return equipmentScan.Cancel();
+    }
+
+    public RenderedEquipmentScanProgress BeginRetainerEquipmentScan() =>
+        retainerEquipmentScan.Begin(CaptureRetainerUi(), "RetainerCharacter");
+
+    public RenderedEquipmentScanStepResult AdvanceRetainerEquipmentScan() => AdvanceEquipmentScan(
+        retainerEquipmentScan,
+        "RetainerCharacter",
+        FFXIVClientStructs.FFXIV.Client.Game.InventoryType.RetainerEquippedItems,
+        CaptureRetainerUi);
+
+    public RenderedEquipmentScanProgress CancelRetainerEquipmentScan()
+    {
+        HideEquipmentTooltip("RetainerCharacter");
+        return retainerEquipmentScan.Cancel();
+    }
+
+    private RenderedEquipmentScanStepResult AdvanceEquipmentScan(
+        RenderedCharacterEquipmentScanCoordinator coordinator,
+        string addonName,
+        FFXIVClientStructs.FFXIV.Client.Game.InventoryType inventoryType,
+        Func<AgentBridgeRenderedUiSnapshot> capture)
+    {
+        var progress = coordinator.Snapshot();
         if (progress.Status == RenderedEquipmentScanStatus.ReadyToHover && progress.CurrentTarget is { } target)
         {
-            if (!TryRequestEquipmentTooltip(target, out var reason))
+            if (inventoryType == FFXIVClientStructs.FFXIV.Client.Game.InventoryType.RetainerEquippedItems)
+            {
+                var emptyProof = TryProveRetainerEquipmentSlotEmpty(target, addonName, inventoryType, out var isEmpty, out var emptyReason);
+                if (!emptyProof)
+                {
+                    progress = coordinator.RejectExternalObservation(emptyReason);
+                    return new(false, progress, progress.Diagnostic);
+                }
+                if (isEmpty)
+                {
+                    progress = coordinator.MarkEmpty(target.NodePath);
+                    return new(true, progress, $"The rendered {target.PositionKey} slot is explicitly empty in RetainerEquippedItems.");
+                }
+            }
+            if (!TryRequestEquipmentTooltip(target, addonName, inventoryType, out var reason))
                 return new(false, progress, reason);
-            progress = equipmentScan.MarkHoverStarted(target.NodePath, DateTimeOffset.UtcNow);
+            progress = coordinator.MarkHoverStarted(target.NodePath, DateTimeOffset.UtcNow);
             return new(progress.Status == RenderedEquipmentScanStatus.Observing, progress, progress.Diagnostic);
         }
         if (progress.Status == RenderedEquipmentScanStatus.Observing)
         {
-            progress = equipmentScan.Observe(Capture(), DateTimeOffset.UtcNow);
+            progress = coordinator.Observe(capture(), DateTimeOffset.UtcNow);
             if (progress.Status is RenderedEquipmentScanStatus.Complete or RenderedEquipmentScanStatus.Failed)
-                HideEquipmentTooltip();
+                HideEquipmentTooltip(addonName);
             return new(true, progress, progress.Diagnostic);
         }
         return new(false, progress, "The rendered equipment scan is not waiting for an advance step.");
     }
 
-    public RenderedEquipmentScanProgress CancelEquipmentScan()
+    private unsafe bool TryProveRetainerEquipmentSlotEmpty(
+        RenderedEquipmentSlotTarget target,
+        string addonName,
+        FFXIVClientStructs.FFXIV.Client.Game.InventoryType inventoryType,
+        out bool isEmpty,
+        out string reason)
     {
-        HideEquipmentTooltip();
-        return equipmentScan.Cancel();
+        isEmpty = false;
+        reason = string.Empty;
+        if (inventoryType != FFXIVClientStructs.FFXIV.Client.Game.InventoryType.RetainerEquippedItems)
+        {
+            reason = "Explicit rendered empty-slot proof is restricted to RetainerEquippedItems.";
+            return false;
+        }
+        var containerIndex = EquippedContainerIndex(target.PositionKey);
+        if (containerIndex < 0)
+        {
+            reason = $"Rendered equipment slot {target.PositionKey} has no supported retainer-equipped index.";
+            return false;
+        }
+        var addon = gameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
+        var node = addon == null ? null : ResolveNodeByPath(addon, addonName, target.NodePath);
+        if (addon == null || addon->RootNode == null || !addon->RootNode->IsVisible() || !addon->IsReady ||
+            node == null || !IsEffectivelyVisible(node))
+        {
+            reason = $"The exact rendered {addonName} slot is unavailable; empty-slot proof fails closed.";
+            return false;
+        }
+        var manager = FFXIVClientStructs.FFXIV.Client.Game.InventoryManager.Instance();
+        var container = manager == null ? null : manager->GetInventoryContainer(inventoryType);
+        if (container == null || !container->IsLoaded || containerIndex >= container->Size)
+        {
+            reason = "RetainerEquippedItems is unavailable or does not contain the exact rendered slot index.";
+            return false;
+        }
+        var item = container->GetInventorySlot(containerIndex);
+        if (item == null)
+        {
+            reason = "RetainerEquippedItems returned no slot record for the exact rendered position.";
+            return false;
+        }
+        isEmpty = item->ItemId == 0;
+        return true;
     }
 
     public unsafe bool TryOpenArmouryBoard()
@@ -1399,7 +1484,11 @@ public sealed class DalamudRenderedCharacterUiProbe
         _ => -1,
     };
 
-    private unsafe bool TryRequestEquipmentTooltip(RenderedEquipmentSlotTarget target, out string reason)
+    private unsafe bool TryRequestEquipmentTooltip(
+        RenderedEquipmentSlotTarget target,
+        string addonName,
+        FFXIVClientStructs.FFXIV.Client.Game.InventoryType inventoryType,
+        out string reason)
     {
         reason = string.Empty;
         var containerIndex = EquippedContainerIndex(target.PositionKey);
@@ -1408,20 +1497,20 @@ public sealed class DalamudRenderedCharacterUiProbe
             reason = $"Rendered equipment slot {target.PositionKey} has no supported equipped-container index.";
             return false;
         }
-        var addon = gameGui.GetAddonByName<AtkUnitBase>("Character", 1);
+        var addon = gameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
         if (addon == null || addon->RootNode == null || !addon->RootNode->IsVisible())
         {
-            reason = "The rendered Character addon is unavailable; the equipment tooltip request fails closed.";
+            reason = $"The rendered {addonName} addon is unavailable; the equipment tooltip request fails closed.";
             return false;
         }
-        var node = ResolveCharacterNodeByPath(addon, target.NodePath);
+        var node = ResolveNodeByPath(addon, addonName, target.NodePath);
         if (node == null || !IsEffectivelyVisible(node))
         {
             reason = $"The rendered node {target.NodePath} no longer resolves; the equipment tooltip request fails closed.";
             return false;
         }
-        if (!Franthropy.Dalamud.Automation.Ui.RenderedItemDetailTooltipRequest.TryShowEquippedItemTooltip(
-                addon->Id, node, (short)containerIndex))
+        if (!Franthropy.Dalamud.Automation.Ui.RenderedItemDetailTooltipRequest.TryShowInventoryItemTooltip(
+                addon->Id, node, inventoryType, (short)containerIndex))
         {
             reason = $"The game rejected the ItemDetail tooltip request for {target.PositionKey}; equipment observation fails closed.";
             return false;
@@ -1429,18 +1518,18 @@ public sealed class DalamudRenderedCharacterUiProbe
         return true;
     }
 
-    private unsafe void HideEquipmentTooltip()
+    private unsafe void HideEquipmentTooltip(string addonName)
     {
-        var addon = gameGui.GetAddonByName<AtkUnitBase>("Character", 1);
+        var addon = gameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
         if (addon == null)
             return;
         Franthropy.Dalamud.Automation.Ui.RenderedItemDetailTooltipRequest.HideTooltip(addon->Id);
     }
 
-    private static unsafe AtkResNode* ResolveCharacterNodeByPath(AtkUnitBase* addon, string nodePath)
+    private static unsafe AtkResNode* ResolveNodeByPath(AtkUnitBase* addon, string addonName, string nodePath)
     {
         var segments = nodePath.Split('/');
-        if (segments.Length < 2 || !string.Equals(segments[0], "Character", StringComparison.Ordinal))
+        if (segments.Length < 2 || !string.Equals(segments[0], addonName, StringComparison.Ordinal))
             return null;
         var manager = &addon->UldManager;
         AtkResNode* current = null;

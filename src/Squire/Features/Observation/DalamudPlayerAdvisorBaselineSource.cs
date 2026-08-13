@@ -64,6 +64,14 @@ public sealed unsafe class DalamudPlayerAdvisorBaselineSource : IOutfitterTarget
             var totals = new Dictionary<EquipmentStatSemantic, int>();
             foreach (var semantic in family.RelevantSemantics)
             {
+                // These fields come from the exact quality-specific item definition, not a
+                // composable PlayerState base parameter. The assembler replaces this sentinel
+                // with the sum of equipped definition contributions after every slot is proven.
+                if (family.IsDefinitionOwnedSemantic(semantic))
+                {
+                    totals.Add(semantic, 0);
+                    continue;
+                }
                 if (!TryMapPlayerAttribute(semantic, out var attribute))
                     return PlayerAdvisorBaselineAssembler.Failure(
                         PlayerAdvisorBaselineStatus.Unavailable,

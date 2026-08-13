@@ -98,6 +98,7 @@ public interface IAdvisorStatFamily
         IReadOnlyDictionary<EquipmentStatSemantic, int> offerBaseline,
         IReadOnlyDictionary<EquipmentStatSemantic, int> fixedStats);
     EquipmentSolverUtilityVector VectorFromDefinition(EquipmentStatProfile profile);
+    bool IsDefinitionOwnedSemantic(EquipmentStatSemantic semantic) => false;
     bool TryGetNonParameterDefinitionValue(
         EquipmentStatProfile profile,
         EquipmentStatSemantic semantic,
@@ -209,6 +210,10 @@ public sealed class TankAdvisorStatFamily : IAdvisorStatFamily
             Sum(EquipmentStatSemantic.Tenacity),
             Sum(EquipmentStatSemantic.SkillSpeed)));
     }
+
+    public bool IsDefinitionOwnedSemantic(EquipmentStatSemantic semantic) => semantic is
+        EquipmentStatSemantic.PhysicalDamage or EquipmentStatSemantic.PhysicalDefense or
+        EquipmentStatSemantic.MagicalDefense;
 
     public bool TryGetNonParameterDefinitionValue(
         EquipmentStatProfile profile,
@@ -521,6 +526,10 @@ public sealed class PhysicalRangedAdvisorStatFamily : IAdvisorStatFamily
             Sum(EquipmentStatSemantic.DirectHit),
             Sum(EquipmentStatSemantic.SkillSpeed)));
     }
+
+    public bool IsDefinitionOwnedSemantic(EquipmentStatSemantic semantic) => semantic is
+        EquipmentStatSemantic.PhysicalDamage or EquipmentStatSemantic.PhysicalDefense or
+        EquipmentStatSemantic.MagicalDefense;
 
     public bool TryGetNonParameterDefinitionValue(
         EquipmentStatProfile profile,

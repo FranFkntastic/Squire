@@ -245,9 +245,16 @@ internal static class PlayerAdvisorBaselineAssembler
                 captured.MateriaGrades));
         }
 
+        var reconciledTotals = totalStats.ToDictionary(value => value.Key, value => value.Value);
         var fixedStats = new Dictionary<EquipmentStatSemantic, int>();
         foreach (var semantic in family.RelevantSemantics)
         {
+            if (family.IsDefinitionOwnedSemantic(semantic))
+            {
+                reconciledTotals[semantic] = equippedTotals[semantic];
+                fixedStats[semantic] = 0;
+                continue;
+            }
             var remainder = checked(totalStats[semantic] - equippedTotals[semantic]);
             if (remainder < 0)
                 return Result(PlayerAdvisorBaselineStatus.Inconsistent, snapshot, header, totalStats, EmptyStats(), slots,
@@ -259,7 +266,7 @@ internal static class PlayerAdvisorBaselineAssembler
             PlayerAdvisorBaselineStatus.Complete,
             snapshot,
             header,
-            totalStats,
+            reconciledTotals,
             fixedStats,
             slots,
             $"Windowless {family.CoverageJobLabel} player baseline is complete.",

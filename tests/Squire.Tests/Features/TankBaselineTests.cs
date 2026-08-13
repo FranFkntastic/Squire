@@ -33,6 +33,10 @@ public sealed class TankBaselineTests
         Assert.Equal(20, baseline.EquippedSlots.Single(value => value.Position == EquipmentLoadoutPosition.MainHand).Utility.Get("physical-damage"));
         Assert.Equal(500, baseline.FixedStats[EquipmentStatSemantic.Strength]);
         Assert.Equal(300, baseline.FixedStats[EquipmentStatSemantic.Tenacity]);
+        Assert.Equal(0, baseline.FixedStats[EquipmentStatSemantic.PhysicalDamage]);
+        Assert.Equal(20, baseline.TotalStats[EquipmentStatSemantic.PhysicalDamage]);
+        Assert.Equal(0, baseline.FixedStats[EquipmentStatSemantic.PhysicalDefense]);
+        Assert.Equal(0, baseline.FixedStats[EquipmentStatSemantic.MagicalDefense]);
         Assert.All(TankAdvisorStatFamily.Instance.RelevantSemantics, semantic =>
             Assert.True(baseline.FixedStats.ContainsKey(semantic), $"Missing fixed {semantic}."));
     }
@@ -72,6 +76,9 @@ public sealed class TankBaselineTests
         var fixedStats = TankAdvisorStatFamily.Instance.RelevantSemantics.ToDictionary(semantic => semantic, _ => 300);
         fixedStats[EquipmentStatSemantic.Strength] = 500;
         var totals = equippedTotals.ToDictionary(value => value.Key, value => value.Value + fixedStats[value.Key]);
+        totals[EquipmentStatSemantic.PhysicalDamage] = 0;
+        totals[EquipmentStatSemantic.PhysicalDefense] = 0;
+        totals[EquipmentStatSemantic.MagicalDefense] = 0;
         var snapshot = new CharacterEquipmentSnapshot(
             Guid.NewGuid(),
             new(Scope, 21, Header.ClassJobId, DateTimeOffset.UtcNow, true, SnapshotComponentStatus.Complete),

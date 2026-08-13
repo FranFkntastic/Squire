@@ -4,8 +4,8 @@ namespace MarketMafioso.Squire.Outfitter.Utility;
 
 internal static class AdvisorMarketScopeSelector
 {
-    public const int MaximumSampleSize = 48;
-    private const int MinimumPerSlot = 3;
+    public const int MaximumSampleSize = 24;
+    private const int MinimumPerSlot = 2;
 
     public static IReadOnlyList<uint> Select(MinerBotanistAdvisorCatalogResult catalog)
     {

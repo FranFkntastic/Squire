@@ -28,10 +28,26 @@ internal sealed class AdvisorFrontierPresentation
     private readonly EquipmentDecisionSolution[] ordered;
     private readonly Dictionary<string, int> indices;
 
-    public AdvisorFrontierPresentation(EquipmentParetoResult pareto)
+    public AdvisorFrontierPresentation(
+        EquipmentParetoResult pareto,
+        IReadOnlyDictionary<string, AdvisorAuthorityAssessment>? authority = null,
+        string? nominatedSolutionId = null)
     {
         ArgumentNullException.ThrowIfNull(pareto);
-        ordered = pareto.Frontier
+        TotalExactCount = pareto.Frontier.Count;
+        var choices = authority is null
+            ? pareto.Frontier
+            : pareto.Frontier
+                .GroupBy(solution => DecisionKey(solution, authority.GetValueOrDefault(solution.Candidate.SolutionId)))
+                .Select(group => group.Any(solution => string.Equals(solution.Candidate.SolutionId, nominatedSolutionId, StringComparison.Ordinal))
+                    ? group.Single(solution => string.Equals(solution.Candidate.SolutionId, nominatedSolutionId, StringComparison.Ordinal))
+                    : group.OrderBy(solution => solution.AcquisitionCostGil)
+                        .ThenBy(solution => solution.Burden.PurchaseTransactions)
+                        .ThenBy(solution => solution.Burden.WorldVisits)
+                        .ThenBy(solution => solution.Candidate.SolutionId, StringComparer.Ordinal)
+                        .First())
+                .ToArray();
+        ordered = choices
             .OrderBy(value => value.AcquisitionCostGil)
             .ThenBy(value => value.Utility.UtilityScore)
             .ThenBy(value => value.Candidate.SolutionId, StringComparer.Ordinal)
@@ -42,6 +58,7 @@ internal sealed class AdvisorFrontierPresentation
     }
 
     public int Count => ordered.Length;
+    public int TotalExactCount { get; }
     public EquipmentDecisionSolution First => ordered[0];
 
     public bool TryGet(string? solutionId, out EquipmentDecisionSolution solution)
@@ -81,4 +98,12 @@ internal sealed class AdvisorFrontierPresentation
         var visibleCount = Math.Min(boundedCount, ordered.Length - boundedOffset);
         return new(boundedOffset, new ArraySegment<EquipmentDecisionSolution>(ordered, boundedOffset, visibleCount), ordered.Length);
     }
+
+    private static string DecisionKey(
+        EquipmentDecisionSolution solution,
+        AdvisorAuthorityAssessment? authority) => string.Join("||",
+        solution.Utility.UtilityScore.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+        authority?.AdvisorMayConsider ?? false,
+        authority?.Assessment.ToString() ?? "Unknown",
+        string.Join('|', (authority?.GainedCapabilityIds ?? []).Order(StringComparer.Ordinal)));
 }

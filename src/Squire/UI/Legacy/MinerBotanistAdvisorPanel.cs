@@ -636,7 +636,10 @@ internal sealed class MinerBotanistAdvisorPanel
         if (ReferenceEquals(lastAdvice, advice))
             return;
         lastAdvice = advice;
-        frontierPresentation = new(advice.Frontier!.Pareto);
+        frontierPresentation = new(
+            advice.Frontier!.Pareto,
+            advice.AuthorityBySolutionId,
+            advice.Nomination?.Candidate.SolutionId);
         SelectSolution(advice, advice.Nomination?.Candidate.SolutionId ?? frontierPresentation.First.Candidate.SolutionId);
     }
 
@@ -938,7 +941,9 @@ internal sealed class MinerBotanistAdvisorPanel
                 () => SelectSolution(advice, nomination.Candidate.SolutionId));
         }
         ImGui.SameLine();
-        ImGui.TextDisabled($"{selectedIndex + 1:N0} / {frontierPresentation.Count:N0}");
+        ImGui.TextDisabled(frontierPresentation.TotalExactCount == frontierPresentation.Count
+            ? $"{selectedIndex + 1:N0} / {frontierPresentation.Count:N0}"
+            : $"{selectedIndex + 1:N0} / {frontierPresentation.Count:N0} choices Â· {frontierPresentation.TotalExactCount:N0} exact loadouts");
         if (!ImGui.BeginTable("##SquireAdvisorRail", 4,
                 ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingStretchProp,
                 new Vector2(0, Math.Min(150f, 30f + frontierWindow.Solutions.Count * 25f))))

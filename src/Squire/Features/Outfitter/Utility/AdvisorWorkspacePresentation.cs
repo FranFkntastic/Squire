@@ -126,6 +126,7 @@ public static class AdvisorWorkspacePresentationResolver
     {
         GathererAdvisorStatFamily => "Gathering",
         CrafterAdvisorStatFamily => "Crafting",
+        TankAdvisorStatFamily => "Tank",
         PhysicalRangedAdvisorStatFamily => "Physical ranged DPS",
         _ when isFisher => "Fisher",
         _ => "Unsupported job",
@@ -154,6 +155,7 @@ public static class AdvisorWorkspacePresentationResolver
     {
         "Gathering" => $"Compare equipped {jobLabel} gear with owned, vendor, crafted, and market options.",
         "Crafting" => $"Compare equipped {jobLabel} gear with owned, vendor, crafted, and market options using the crafting stat model.",
+        "Tank" => $"Compare equipped {jobLabel} gear with owned, vendor, and market options using the conservative tank model.",
         "Physical ranged DPS" => $"Compare equipped {jobLabel} gear with owned, vendor, crafted, and market options using the physical-ranged role model.",
         _ => "Squire will evaluate the active job only when an authoritative model is available.",
     };

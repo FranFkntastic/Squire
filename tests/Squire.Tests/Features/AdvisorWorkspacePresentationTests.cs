@@ -65,6 +65,7 @@ public sealed class AdvisorWorkspacePresentationTests
     [Theory]
     [InlineData(MinerBotanistUtilityProfile.MinerClassJobId, "MIN", "Gathering", "Ordinary nodes")]
     [InlineData(CrafterUtilityProfile.BlacksmithClassJobId, "BSM", "Crafting", "Ordinary crafts")]
+    [InlineData(TankUtilityProfile.MarauderClassJobId, "MRD", "Tank", "General tank combat")]
     [InlineData(PhysicalRangedUtilityProfile.BardClassJobId, "BRD", "Physical ranged DPS", "General physical-ranged combat")]
     public void SupportedFamilyOwnsItsJobContextAndEmptyCopy(
         uint classJobId,
@@ -90,6 +91,7 @@ public sealed class AdvisorWorkspacePresentationTests
     [Theory]
     [InlineData(MinerBotanistUtilityProfile.BotanistClassJobId, "BTN", "gathering")]
     [InlineData(CrafterUtilityProfile.BlacksmithClassJobId, "BSM", "crafting")]
+    [InlineData(TankUtilityProfile.WarriorClassJobId, "WAR", "tank")]
     [InlineData(PhysicalRangedUtilityProfile.MachinistClassJobId, "MCH", "physical ranged")]
     public void CaptureProgressUsesTheActiveJobAndFamily(uint classJobId, string job, string family)
     {

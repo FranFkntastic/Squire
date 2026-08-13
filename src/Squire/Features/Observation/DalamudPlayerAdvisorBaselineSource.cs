@@ -331,7 +331,7 @@ public sealed unsafe class DalamudPlayerAdvisorBaselineSource : IOutfitterTarget
             var classJobId = resolution.Fingerprint?.ClassJobId ?? target.Job?.ClassJobId;
             var family = classJobId is null ? null : AdvisorStatFamilies.Resolve(classJobId.Value);
             if (resolution.Status != SavedGearsetTargetResolutionStatus.Complete || family is null ||
-                family is PhysicalRangedAdvisorStatFamily)
+                family is PhysicalRangedAdvisorStatFamily or TankAdvisorStatFamily)
             {
                 return SavedGearsetAdvisorBaselineAssembler.Assemble(snapshot, target, resolution, family, []);
             }

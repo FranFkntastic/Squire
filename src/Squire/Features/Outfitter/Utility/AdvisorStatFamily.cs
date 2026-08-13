@@ -12,6 +12,17 @@ public sealed record AdvisorCombatRoleDescriptor(
 
 public static class AdvisorCombatRoles
 {
+    public static readonly AdvisorCombatRoleDescriptor TwoHandedTank = new(
+        "two-handed-tank",
+        "Tank",
+        new HashSet<uint>
+        {
+            TankUtilityProfile.MarauderClassJobId,
+            TankUtilityProfile.WarriorClassJobId,
+            TankUtilityProfile.DarkKnightClassJobId,
+            TankUtilityProfile.GunbreakerClassJobId,
+        });
+
     public static readonly AdvisorCombatRoleDescriptor PhysicalRanged = new(
         "physical-ranged",
         "Physical ranged DPS",
@@ -22,7 +33,7 @@ public static class AdvisorCombatRoles
             PhysicalRangedUtilityProfile.DancerClassJobId,
         });
 
-    public static IReadOnlyList<AdvisorCombatRoleDescriptor> All { get; } = [PhysicalRanged];
+    public static IReadOnlyList<AdvisorCombatRoleDescriptor> All { get; } = [TwoHandedTank, PhysicalRanged];
 
     public static AdvisorCombatRoleDescriptor? Resolve(uint classJobId) =>
         All.FirstOrDefault(role => role.ClassJobIds.Contains(classJobId));
@@ -103,7 +114,7 @@ public static class AdvisorStatFamilies
     public const uint FisherClassJobId = 18;
 
     public static IReadOnlyList<IAdvisorStatFamily> All { get; } =
-        [GathererAdvisorStatFamily.Instance, CrafterAdvisorStatFamily.Instance, PhysicalRangedAdvisorStatFamily.Instance];
+        [GathererAdvisorStatFamily.Instance, CrafterAdvisorStatFamily.Instance, TankAdvisorStatFamily.Instance, PhysicalRangedAdvisorStatFamily.Instance];
 
     public static IAdvisorStatFamily? Resolve(uint classJobId) =>
         All.FirstOrDefault(family => family.SupportedClassJobIds.Contains(classJobId));
@@ -111,6 +122,127 @@ public static class AdvisorStatFamilies
     public static string UnsupportedDiagnostic(uint classJobId) => classJobId == FisherClassJobId
         ? "Fisher is permanently unsupported and out of scope for Squire Outfitter."
         : $"Class/job {classJobId} has no advisor stat family yet.";
+}
+
+public sealed class TankAdvisorStatFamily : IAdvisorStatFamily
+{
+    public static readonly TankAdvisorStatFamily Instance = new();
+
+    private static readonly EquipmentStatSemantic[] Semantics =
+    [
+        EquipmentStatSemantic.Strength,
+        EquipmentStatSemantic.Vitality,
+        EquipmentStatSemantic.PhysicalDamage,
+        EquipmentStatSemantic.PhysicalDefense,
+        EquipmentStatSemantic.MagicalDefense,
+        EquipmentStatSemantic.CriticalHit,
+        EquipmentStatSemantic.Determination,
+        EquipmentStatSemantic.DirectHit,
+        EquipmentStatSemantic.Tenacity,
+        EquipmentStatSemantic.SkillSpeed,
+    ];
+
+    public static readonly AdvisorUtilityContextDescriptor GeneralCombatContext = new(
+        TankUtilityProfile.GeneralCombatContextId,
+        nameof(TankUtilityContextKind.GeneralCombat),
+        "General tank combat");
+
+    private static readonly AdvisorUtilityProfileDescriptor Descriptor = new(
+        TankUtilityProfile.ProfileId,
+        TankUtilityProfile.ProfileVersion,
+        TankUtilityProfile.CalibrationState,
+        [GeneralCombatContext],
+        GeneralCombatContext.Id);
+
+    public AdvisorUtilityProfileDescriptor ProfileDescriptor => Descriptor;
+    public IReadOnlySet<uint> SupportedClassJobIds => AdvisorCombatRoles.TwoHandedTank.ClassJobIds;
+    public string CoverageJobLabel => "MRD/WAR/DRK/GNB";
+    public IReadOnlyList<EquipmentStatSemantic> RelevantSemantics => Semantics;
+    public AdvisorUtilityContextDescriptor ResolveContext(string? value) => Descriptor.ResolveContext(value);
+
+    public bool IsRelevantSemantic(EquipmentStatSemantic semantic) => Semantics.Contains(semantic);
+
+    public EquipmentSolverUtilityVector VectorFromSemantics(IReadOnlyDictionary<EquipmentStatSemantic, int> stats) =>
+        TankUtilityProfile.ToVector(FromSemantics(stats));
+
+    public IEquipmentExactSolverUtilityModel CreateUtilityModel(
+        string contextId,
+        IReadOnlyDictionary<EquipmentStatSemantic, int> baseline,
+        IReadOnlyDictionary<EquipmentStatSemantic, int>? fixedStats,
+        uint classJobId,
+        uint characterLevel) =>
+        new TankUtilityProfile(
+            TankUtilityContextKind.GeneralCombat,
+            FromSemantics(baseline),
+            classJobId,
+            characterLevel,
+            fixedStats is null ? null : FromSemantics(fixedStats));
+
+    public AdvisorAuthorityAssessment AssessAuthority(
+        IEquipmentExactSolverUtilityModel model,
+        EquipmentUtilityEvaluation candidate,
+        ulong additionalCostGil) =>
+        ((TankUtilityProfile)model).AssessAuthority(candidate, additionalCostGil);
+
+    public IAdvisorSolverReplay? CaptureReplay(
+        EquipmentExactFrontierRequest request,
+        string contextId,
+        uint classJobId,
+        uint characterLevel,
+        IReadOnlyDictionary<EquipmentStatSemantic, int> offerBaseline,
+        IReadOnlyDictionary<EquipmentStatSemantic, int> fixedStats) =>
+        null;
+
+    public EquipmentSolverUtilityVector VectorFromDefinition(EquipmentStatProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        int Sum(EquipmentStatSemantic semantic) => profile.Parameters.Where(value => value.Semantic == semantic).Sum(value => value.Value);
+        return TankUtilityProfile.ToVector(new(
+            Sum(EquipmentStatSemantic.Strength),
+            Sum(EquipmentStatSemantic.Vitality),
+            profile.PhysicalDamage,
+            profile.PhysicalDefense,
+            profile.MagicalDefense,
+            Sum(EquipmentStatSemantic.CriticalHit),
+            Sum(EquipmentStatSemantic.Determination),
+            Sum(EquipmentStatSemantic.DirectHit),
+            Sum(EquipmentStatSemantic.Tenacity),
+            Sum(EquipmentStatSemantic.SkillSpeed)));
+    }
+
+    public bool TryGetNonParameterDefinitionValue(
+        EquipmentStatProfile profile,
+        EquipmentStatSemantic semantic,
+        out int value)
+    {
+        if (!profile.IsComplete)
+        {
+            value = 0;
+            return false;
+        }
+        value = semantic switch
+        {
+            EquipmentStatSemantic.PhysicalDamage => profile.PhysicalDamage,
+            EquipmentStatSemantic.PhysicalDefense => profile.PhysicalDefense,
+            EquipmentStatSemantic.MagicalDefense => profile.MagicalDefense,
+            _ => 0,
+        };
+        return semantic is EquipmentStatSemantic.PhysicalDamage or
+            EquipmentStatSemantic.PhysicalDefense or EquipmentStatSemantic.MagicalDefense;
+    }
+
+    private static TankUtilityStats FromSemantics(IReadOnlyDictionary<EquipmentStatSemantic, int> stats) =>
+        new(
+            stats.GetValueOrDefault(EquipmentStatSemantic.Strength),
+            stats.GetValueOrDefault(EquipmentStatSemantic.Vitality),
+            stats.GetValueOrDefault(EquipmentStatSemantic.PhysicalDamage),
+            stats.GetValueOrDefault(EquipmentStatSemantic.PhysicalDefense),
+            stats.GetValueOrDefault(EquipmentStatSemantic.MagicalDefense),
+            stats.GetValueOrDefault(EquipmentStatSemantic.CriticalHit),
+            stats.GetValueOrDefault(EquipmentStatSemantic.Determination),
+            stats.GetValueOrDefault(EquipmentStatSemantic.DirectHit),
+            stats.GetValueOrDefault(EquipmentStatSemantic.Tenacity),
+            stats.GetValueOrDefault(EquipmentStatSemantic.SkillSpeed));
 }
 
 public sealed class GathererAdvisorStatFamily : IAdvisorStatFamily

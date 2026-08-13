@@ -33,4 +33,16 @@ public sealed class AdvisorStatFamilyCompatibilityTests
             AdvisorStatFamilies.UnsupportedDiagnostic(AdvisorStatFamilies.FisherClassJobId));
     }
 
+    [Fact]
+    public void MarauderResolvesToTankWhilePaladinWaitsForShieldEvidence()
+    {
+        Assert.Same(
+            TankAdvisorStatFamily.Instance,
+            AdvisorStatFamilies.Resolve(TankUtilityProfile.MarauderClassJobId));
+        Assert.Same(
+            TankAdvisorStatFamily.GeneralCombatContext,
+            TankAdvisorStatFamily.Instance.ResolveContext("unknown-legacy-context"));
+        Assert.Null(AdvisorStatFamilies.Resolve(19));
+    }
+
 }

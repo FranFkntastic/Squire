@@ -1255,7 +1255,7 @@ internal sealed class SquireTabPanel : IDisposable
             }
         }
         RegisterLastControl(
-            "squire.run.confirm",
+            SquireCleanupRunControlIds.Confirm,
             "Confirm the cleanup batch",
             AgentBridgeUiControlKind.Toggle,
             canRun,
@@ -1281,7 +1281,7 @@ internal sealed class SquireTabPanel : IDisposable
         if (ImGui.Button("Run cleanup with diagnostics##Squire"))
             StartDiagnosticRun(value);
         RegisterLastControl(
-            "squire.run.diagnostic",
+            SquireCleanupRunControlIds.Diagnostic,
             "Run the explicitly confirmed cleanup batch with catchall UI-state recording enabled",
             AgentBridgeUiControlKind.Button,
             runEnabled,
@@ -1296,7 +1296,7 @@ internal sealed class SquireTabPanel : IDisposable
         if (ImGui.Button("Run selected cleanup##Squire"))
             StartRun(value);
         RegisterLastControl(
-            "squire.run.cleanup",
+            SquireCleanupRunControlIds.Cleanup,
             "Run the explicitly confirmed cleanup batch using each item's disposition",
             AgentBridgeUiControlKind.Button,
             runEnabled,
@@ -1320,6 +1320,14 @@ internal sealed class SquireTabPanel : IDisposable
             ImGui.SameLine();
             if (ImGui.Button("Cancel active Squire run##Squire"))
                 runCancellation?.Cancel();
+            RegisterLastControl(
+                SquireCleanupRunControlIds.Cancel,
+                "Cancel the active Squire cleanup run",
+                AgentBridgeUiControlKind.Button,
+                true,
+                false,
+                null,
+                () => runCancellation?.Cancel());
         }
 
     }

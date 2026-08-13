@@ -20,6 +20,18 @@ public sealed class SquireCleanupPresentationStateTests
     }
 
     [Fact]
+    public void Cleanup_run_control_ids_include_the_active_cancel_boundary()
+    {
+        Assert.Equal("squire.run.confirm", SquireCleanupRunControlIds.Confirm);
+        Assert.Equal("squire.run.diagnostic", SquireCleanupRunControlIds.Diagnostic);
+        Assert.Equal("squire.run.cleanup", SquireCleanupRunControlIds.Cleanup);
+        Assert.Equal("squire.run.cancel", SquireCleanupRunControlIds.Cancel);
+        Assert.Equal(
+            SquireCleanupRunControlIds.All.Count,
+            SquireCleanupRunControlIds.All.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
     public void Reviewed_filter_edit_uses_the_existing_filter_without_changing_selection_or_run_authority()
     {
         var persisted = string.Empty;

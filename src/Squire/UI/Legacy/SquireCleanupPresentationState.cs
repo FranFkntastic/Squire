@@ -73,6 +73,16 @@ internal static class SquireCleanupFilterEdit
     }
 }
 
+internal static class SquireCleanupRunControlIds
+{
+    public const string Confirm = "squire.run.confirm";
+    public const string Diagnostic = "squire.run.diagnostic";
+    public const string Cleanup = "squire.run.cleanup";
+    public const string Cancel = "squire.run.cancel";
+
+    public static IReadOnlyList<string> All { get; } = [Confirm, Diagnostic, Cleanup, Cancel];
+}
+
 internal sealed class SquireCleanupColumnMenuRequest
 {
     private bool requested;

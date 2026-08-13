@@ -22,7 +22,9 @@ public sealed class AgentBridgeProviderTests
                 0,
                 0,
                 null,
-                new SquireBridgeProductTruth("WaitingForAnalysis", null, false, 0, 0, 0, 0, false, false, "Idle", null, null, null, null, null)),
+                new SquireBridgeProductTruth(
+                    "WaitingForAnalysis", null, false, 0, 0, 0, 0, false, false, "Idle", null, null, null, null, null,
+                    new SquireBridgeSettingsTruth("safety", true, true, false, true, 30, false, false, true, true, 90, false, true, true, true, true, false, false, false))),
             () => opened = true,
             () => { },
             new AgentBridgeUiReviewRegistry());

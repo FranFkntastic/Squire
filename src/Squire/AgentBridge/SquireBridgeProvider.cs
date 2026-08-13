@@ -30,7 +30,29 @@ public sealed record SquireBridgeProductTruth(
     string? OperationalStatusSource,
     string? OperationalStatusMessage,
     DateTimeOffset? OperationalStatusCreatedAtUtc,
-    DateTimeOffset? OperationalStatusExpiresAtUtc);
+    DateTimeOffset? OperationalStatusExpiresAtUtc,
+    SquireBridgeSettingsTruth Settings);
+
+public sealed record SquireBridgeSettingsTruth(
+    string SelectedPage,
+    bool ProtectBlueAndPurpleGear,
+    bool ProtectMateria,
+    bool ProtectPlayerSignedGear,
+    bool ProtectArmoireEligible,
+    int AuditRetentionDays,
+    bool ProtectFutureLevelingGearOptIn,
+    bool AllowRiskyMateriaRetrieval,
+    bool RecoverFromKnockout,
+    bool WaitForCombatToEnd,
+    int CombatRecoveryTimeoutSeconds,
+    bool LeaveDutyToExecute,
+    bool PauseGatherBuddyReborn,
+    bool PauseQuestionable,
+    bool PauseArtisan,
+    bool CloseSafeUserMenus,
+    bool RouteDiagnosticsVisible,
+    bool AdvisorFixturesEnabled,
+    bool AgentBridgeAuditEnabled);
 
 public sealed class SquireBridgeProvider
 {

@@ -151,7 +151,9 @@ public sealed class Plugin : IDalamudPlugin
             new DalamudPlayerAdvisorBaselineSource(snapshotSource, PlayerState, DataManager),
             () => configuration.ActiveMarketAcquisitionRequestDocument?.Region
                   ?? configuration.ActiveMarketAcquisitionClaim?.Region
-                  ?? "North America");
+                  ?? "North America",
+            () => configuration.EnableAgentBridgeAudit,
+            enabled => configuration.EnableAgentBridgeAudit = enabled);
         marketMafiosoAcquisition = new MarketMafiosoAcquisitionIpcClient(pluginInterface);
         featurePanel.ConnectMarketAcquisition(marketMafiosoAcquisition.Stage);
         window = new(SaveAndPublish, importer, featurePanel, reviewRegistry);
@@ -170,7 +172,7 @@ public sealed class Plugin : IDalamudPlugin
         });
         pluginInterface.UiBuilder.Draw += windows.Draw;
         pluginInterface.UiBuilder.OpenMainUi += OpenWindow;
-        pluginInterface.UiBuilder.OpenConfigUi += OpenWindow;
+        pluginInterface.UiBuilder.OpenConfigUi += OpenSettingsWindow;
         framework.Update += OnFrameworkUpdate;
     }
 
@@ -180,7 +182,7 @@ public sealed class Plugin : IDalamudPlugin
         agentBridge.Dispose();
         pluginInterface.UiBuilder.Draw -= windows.Draw;
         pluginInterface.UiBuilder.OpenMainUi -= OpenWindow;
-        pluginInterface.UiBuilder.OpenConfigUi -= OpenWindow;
+        pluginInterface.UiBuilder.OpenConfigUi -= OpenSettingsWindow;
         framework.Update -= OnFrameworkUpdate;
         commands.RemoveHandler(Command);
         windows.RemoveAllWindows();
@@ -192,6 +194,12 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     private void OpenWindow() => window.IsOpen = true;
+
+    private void OpenSettingsWindow()
+    {
+        featurePanel.OpenSettings();
+        window.IsOpen = true;
+    }
 
     private void HandleCommand(string arguments)
     {
@@ -235,7 +243,7 @@ public sealed class Plugin : IDalamudPlugin
     });
 
     private SquireBridgeTruth CreateBridgeTruth() => new(
-        1,
+        2,
         configuration.PluginInstanceId,
         Environment.ProcessId,
         GetType().Assembly.GetName().Version?.ToString() ?? "unknown",

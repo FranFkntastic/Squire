@@ -48,10 +48,11 @@ internal sealed class SquireTabPanel : IDisposable
     private readonly SquireInventoryChangeMonitor inventoryChangeMonitor;
     private readonly MinerBotanistAdvisorSession advisorSession;
     private readonly MinerBotanistAdvisorPanel advisorPanel;
+    private readonly SquireWorkspaceState workspaceState;
+    private readonly SquireSettingsPanel settingsPanel;
     private readonly OutfitterPassiveCraftComposition? passiveCraftComposition;
     private Action<OutfitterWorkbenchTransfer>? stageOutfitterTransfer;
     private readonly Func<uint, string> resolveItemName;
-    private string selectedWorkspace;
     private SquireAnalysis? analysis;
     private SquireRunPresentation? lastRun;
     private string search = string.Empty;
@@ -94,7 +95,9 @@ internal sealed class SquireTabPanel : IDisposable
         IDataManager dataManager,
         IMarketAcquisitionListingSource marketListingSource,
         IPlayerAdvisorBaselineSource playerAdvisorBaselineSource,
-        Func<string> resolveAcquisitionRegion)
+        Func<string> resolveAcquisitionRegion,
+        Func<bool> getAgentBridgeAudit,
+        Action<bool> setAgentBridgeAudit)
     {
         this.config = config;
         this.snapshotSource = snapshotSource;
@@ -135,15 +138,15 @@ internal sealed class SquireTabPanel : IDisposable
             marketListingSource,
             resolveAcquisitionRegion,
             transfer => stageOutfitterTransfer?.Invoke(transfer));
-        selectedWorkspace = "Cleanup";
-        if (!string.Equals(config.Squire.SelectedWorkspace, selectedWorkspace, StringComparison.Ordinal))
-        {
-            config.Squire.SelectedWorkspace = selectedWorkspace;
-            config.Save();
-        }
+        workspaceState = new SquireWorkspaceState(config);
         ruleStore = new SquireCleanupRuleStore(config);
         evidencePanel = new SquireEvidencePanel(ruleStore, reviewRegistry, Refresh);
         routeDiagnosticsPanel = new SquireRouteDiagnosticsPanel(actionAdapter, reviewRegistry, uiStateCapture);
+        settingsPanel = new SquireSettingsPanel(
+            new SquireSettingsState(config, RequestPolicyRefresh, getAgentBridgeAudit, setAgentBridgeAudit),
+            reviewRegistry,
+            () => SelectWorkspace(SquireWorkspaces.Cleanup),
+            () => routeDiagnosticsPanel.Draw(analysis, focusedItem));
         search = config.Squire.Search;
         showProtected = config.Squire.ShowProtected;
         showNonEquipment = config.Squire.ShowNonEquipment;
@@ -154,9 +157,15 @@ internal sealed class SquireTabPanel : IDisposable
         MaybeRefreshAutomatically();
         DrawWorkspaceSelector();
         ImGui.Separator();
-        if (selectedWorkspace == "Outfitter")
+        if (workspaceState.SelectedWorkspace == SquireWorkspaces.Outfitter)
         {
             DrawOutfitter();
+            return;
+        }
+
+        if (workspaceState.SelectedWorkspace == SquireWorkspaces.Settings)
+        {
+            settingsPanel.Draw();
             return;
         }
 
@@ -170,27 +179,31 @@ internal sealed class SquireTabPanel : IDisposable
 
     public void OpenOutfitterAdvisor()
     {
-        SelectWorkspace("Outfitter");
+        SelectWorkspace(SquireWorkspaces.Outfitter);
     }
+
+    public void OpenSettings() => workspaceState.OpenSettings();
 
 #if DEBUG
     public void OpenSyntheticAdvisorReview()
     {
-        SelectWorkspace("Outfitter");
+        SelectWorkspace(SquireWorkspaces.Outfitter);
         advisorPanel.LoadSyntheticReview();
     }
 #endif
 
     private void DrawWorkspaceSelector()
     {
-        DrawWorkspaceButton("Cleanup", "Cleanup", "Review and execute equipment cleanup");
+        DrawWorkspaceButton(SquireWorkspaces.Cleanup, "Cleanup", "Review and execute equipment cleanup");
         ImGui.SameLine();
-        DrawWorkspaceButton("Outfitter", "Gear upgrades", "Find and acquire complete gear upgrades");
+        DrawWorkspaceButton(SquireWorkspaces.Outfitter, "Gear upgrades", "Find and acquire complete gear upgrades");
+        ImGui.SameLine();
+        DrawWorkspaceButton(SquireWorkspaces.Settings, "Settings", "Configure Squire");
     }
 
     private void DrawWorkspaceButton(string workspace, string visibleLabel, string reviewLabel)
     {
-        var selected = selectedWorkspace == workspace;
+        var selected = workspaceState.SelectedWorkspace == workspace;
         if (DalamudUiControls.SegmentedOption(
                 $"{visibleLabel}##SquireWorkspace{workspace}",
                 selected,
@@ -198,7 +211,7 @@ internal sealed class SquireTabPanel : IDisposable
                 new(112f, 0)))
             SelectWorkspace(workspace);
         RegisterLastControl(
-            $"squire.workspace.{workspace.ToLowerInvariant()}",
+            workspace == SquireWorkspaces.Settings ? SquireSettingsControlIds.Workspace : $"squire.workspace.{workspace.ToLowerInvariant()}",
             reviewLabel,
             AgentBridgeUiControlKind.Select,
             true,
@@ -209,9 +222,7 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void SelectWorkspace(string workspace)
     {
-        selectedWorkspace = workspace;
-        config.Squire.SelectedWorkspace = workspace;
-        config.Save();
+        workspaceState.Select(workspace);
     }
 
     private void DrawOutfitter()
@@ -489,7 +500,8 @@ internal sealed class SquireTabPanel : IDisposable
             currentStatus?.Source.ToString(),
             currentStatus?.Message,
             currentStatus?.CreatedAtUtc,
-            currentStatus?.ExpiresAtUtc);
+            currentStatus?.ExpiresAtUtc,
+            settingsPanel.CreateBridgeTruth());
     }
 
     private static SquireCleanupSurfaceState ResolveCleanupSurfaceState(SquireAnalysis? value) =>

@@ -252,6 +252,16 @@ internal sealed class SquireTabPanel : IDisposable
         if (!config.EnableMarketAcquisitionDryRunTools)
             cleanupSyntheticReview = null;
 #endif
+        var headingActionWidth = 116f;
+#if DEBUG
+        if (cleanupSyntheticReview is not null)
+        {
+            var style = ImGui.GetStyle();
+            headingActionWidth = ImGui.CalcTextSize("Return to live cleanup").X +
+                                 (style.FramePadding.X * 2f) +
+                                 style.ItemSpacing.X;
+        }
+#endif
         DalamudUiChrome.DrawSectionHeading(
             "Equipment cleanup",
             "Safe recommendations from current character evidence",
@@ -273,7 +283,7 @@ internal sealed class SquireTabPanel : IDisposable
                     Refresh();
                 RegisterLastControl("squire.refresh", "Refresh Squire analysis", AgentBridgeUiControlKind.Button, true, false, null, Refresh);
             },
-            116f);
+            headingActionWidth);
         ImGui.Spacing();
 #if DEBUG
         if (cleanupSyntheticReview is not null)

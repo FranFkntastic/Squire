@@ -950,7 +950,7 @@ internal sealed class MinerBotanistAdvisorPanel
             return;
         ImGui.TableSetupColumn(selected.AcquisitionCostEstimate is null ? "Cost" : "Expected cost", ImGuiTableColumnFlags.WidthFixed, 105f);
         ImGui.TableSetupColumn("Utility", ImGuiTableColumnFlags.WidthFixed, 75f);
-        ImGui.TableSetupColumn("Gain", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("No-loss gains", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableSetupColumn("Burden", ImGuiTableColumnFlags.WidthFixed, 120f);
         foreach (var solution in frontierWindow.Solutions)
         {
@@ -984,17 +984,17 @@ internal sealed class MinerBotanistAdvisorPanel
     private static string AuthorityLabel(AdvisorAuthorityAssessment authority)
     {
         if (!authority.AdvisorMayConsider)
-            return "Doesn't meet the no-loss rule";
+            return "Doesn't qualify";
         if (authority.GainedCapabilityIds.Count == 0)
             return "No-loss improvement";
         return string.Join(", ", authority.GainedCapabilityIds.Select(id => id switch
         {
-            "no-loss-strength-gain" => "Strength",
-            "no-loss-physical-damage-gain" => "Weapon damage",
-            "no-loss-vitality-gain" => "Vitality",
-            "no-loss-physical-defense-gain" => "Physical defense",
-            "no-loss-magical-defense-gain" => "Magical defense",
-            "no-loss-tenacity-gain" => "Tenacity",
+            "no-loss-strength-gain" => "STR",
+            "no-loss-physical-damage-gain" => "Wpn dmg",
+            "no-loss-vitality-gain" => "VIT",
+            "no-loss-physical-defense-gain" => "P.Def",
+            "no-loss-magical-defense-gain" => "M.Def",
+            "no-loss-tenacity-gain" => "TEN",
             _ => id.Replace('-', ' '),
         }));
     }

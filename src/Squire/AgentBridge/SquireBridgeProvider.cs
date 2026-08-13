@@ -12,7 +12,25 @@ public sealed record SquireBridgeTruth(
     string Workspace,
     int CleanupRuleCount,
     int CharacterRuleCount,
-    DateTimeOffset? LegacyMmfImportedAtUtc);
+    DateTimeOffset? LegacyMmfImportedAtUtc,
+    SquireBridgeProductTruth Product);
+
+public sealed record SquireBridgeProductTruth(
+    string CleanupSurfaceState,
+    DateTimeOffset? SnapshotCapturedAtUtc,
+    bool SnapshotComplete,
+    int CandidateCount,
+    int ExecutableCandidateCount,
+    int SelectedBatchCount,
+    int HiddenSelectedBatchCount,
+    bool RunConfirmed,
+    bool RunActive,
+    string AdvisorStage,
+    string? OperationalStatusKind,
+    string? OperationalStatusSource,
+    string? OperationalStatusMessage,
+    DateTimeOffset? OperationalStatusCreatedAtUtc,
+    DateTimeOffset? OperationalStatusExpiresAtUtc);
 
 public sealed class SquireBridgeProvider
 {

@@ -238,5 +238,6 @@ public sealed class Plugin : IDalamudPlugin
         configuration.FeatureSettings.SelectedWorkspace,
         configuration.FeatureSettings.CleanupRules.Count,
         configuration.FeatureSettings.RulesByCharacter.Values.Sum(rules => rules.Count),
-        configuration.LegacyMmfMigration?.ImportedAtUtc);
+        configuration.LegacyMmfMigration?.ImportedAtUtc,
+        featurePanel.CreateStandaloneBridgeTruth());
 }

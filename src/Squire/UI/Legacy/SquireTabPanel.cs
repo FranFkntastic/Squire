@@ -20,6 +20,7 @@ using Franthropy.Dalamud.Equipment;
 using Franthropy.Dalamud.UI.Tables;
 using Franthropy.Dalamud.UI.Styling;
 using Squire.UI;
+using Squire.AgentBridge;
 using MarketMafioso.Diagnostics;
 using MarketMafioso.Squire.Outfitter.Utility;
 using MarketMafioso.Squire.Outfitter.Acquisition;
@@ -68,7 +69,7 @@ internal sealed class SquireTabPanel : IDisposable
     private string automaticRefreshTrigger = "Automatic refresh";
     private string? reconciliationNotice;
     private string? lastAnalysisInputSignature;
-    private string status = "Waiting for the first automatic equipment analysis.";
+    private readonly SquireOperationalStatusState operationalStatus = new();
     private bool runConfirmed;
     private string? confirmedBatchKey;
     private CancellationTokenSource? runCancellation;
@@ -221,17 +222,21 @@ internal sealed class SquireTabPanel : IDisposable
     private void DrawCleanup()
     {
         DalamudUiChrome.DrawSectionHeading(
-            "Squire — cleanup selection",
-            null,
-            SquireUiTheme.Current.Palette);
-        ImGui.TextWrapped("Squire keeps its equipment analysis current automatically. Cleanup happens only through an explicitly selected and confirmed batch.");
-        if (DalamudUiControls.Button(
-                "Refresh##Squire",
-                SquireUiTheme.Current,
-                DalamudUiTone.Accent))
-            Refresh();
-        RegisterLastControl("squire.refresh", "Refresh Squire analysis", AgentBridgeUiControlKind.Button, true, false, null, Refresh);
-        ImGui.SameLine();
+            "Equipment cleanup",
+            "Safe recommendations from current character evidence",
+            SquireUiTheme.Current.Palette,
+            () =>
+            {
+                if (DalamudUiControls.Button(
+                        "Check again##Squire",
+                        SquireUiTheme.Current,
+                        DalamudUiTone.Neutral,
+                        quiet: true))
+                    Refresh();
+                RegisterLastControl("squire.refresh", "Refresh Squire analysis", AgentBridgeUiControlKind.Button, true, false, null, Refresh);
+            },
+            116f);
+        ImGui.Spacing();
         if (DalamudUiControls.Button(
                 "Export evaluation snapshot##Squire",
                 SquireUiTheme.Current,
@@ -240,18 +245,32 @@ internal sealed class SquireTabPanel : IDisposable
                 enabled: analysis is not null))
             Export();
         RegisterLastControl("squire.export", "Export Squire evaluation snapshot", AgentBridgeUiControlKind.Button, analysis is not null, false, null, Export);
-        if (ShouldDrawInlineStatus(analysis, status))
-        {
-            ImGui.SameLine();
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, status);
-        }
-        ImGui.Separator();
+        DrawOperationalStatus();
 
         if (analysis is null)
+        {
+            DrawWaitingForAnalysis();
             return;
-        DrawSummary(analysis);
+        }
+
         DrawSnapshotState(analysis);
+        var surfaceState = ResolveCleanupSurfaceState(analysis);
+        if (surfaceState is SquireCleanupSurfaceState.WaitingForCharacter or SquireCleanupSurfaceState.SnapshotIncomplete)
+            return;
+
+        DrawSummary(analysis);
         ImGui.Separator();
+        if (surfaceState == SquireCleanupSurfaceState.ReadyEmpty)
+        {
+            DalamudUiChrome.DrawCallout(
+                "SquireEmptyCandidateState",
+                "No cleanup candidates",
+                "The equipment snapshot is complete, but no items require cleanup review under the current rules.",
+                SquireUiTheme.Current,
+                DalamudUiTone.Success);
+            return;
+        }
+
         ImGui.SetNextItemWidth(280);
         if (ImGui.InputTextWithHint("##SquireSearch", "Search item, location, or reason", ref search, 160))
         {
@@ -347,6 +366,7 @@ internal sealed class SquireTabPanel : IDisposable
 
     public void OnFrameworkUpdate()
     {
+        _ = operationalStatus.Current(DateTimeOffset.UtcNow);
         advisorSession.Tick();
         if (automaticRefreshRequested)
             MaybeRefreshAutomatically();
@@ -369,7 +389,10 @@ internal sealed class SquireTabPanel : IDisposable
         var runActive = activeRun is { IsCompleted: false };
         if (runActive && !allowDuringRun)
         {
-            status = "Refresh is blocked while Squire owns an active run.";
+            operationalStatus.ReportBoundary(
+                SquireOperationalStatusSource.Refresh,
+                "Refresh blocked while Squire owns an active run.",
+                DateTimeOffset.UtcNow);
             return;
         }
         try
@@ -418,11 +441,8 @@ internal sealed class SquireTabPanel : IDisposable
             automaticRefreshRequested = false;
             automaticRefreshTrigger = "Automatic refresh";
             nextAutomaticRefreshAt = DateTimeOffset.UtcNow.AddSeconds(2);
-            var executable = analysis.Candidates.Count(candidate => candidate.IsExecutable);
             if (!runActive)
-            {
-                status = BuildSnapshotStatus(analysis, executable);
-            }
+                operationalStatus.Resolve(SquireOperationalStatusSource.Refresh, DateTimeOffset.UtcNow);
             reconciliationNotice = reconciliation?.RemovedReasons.Count > 0
                 ? $"{trigger} removed {reconciliation.RemovedReasons.Count} stale cleanup-batch item(s): {string.Join(" ", reconciliation.RemovedReasons.Take(3))}"
                 : reconciliation is { PreservedCount: > 0 }
@@ -433,7 +453,10 @@ internal sealed class SquireTabPanel : IDisposable
         {
             if (analysis is null)
                 review.Invalidate();
-            status = $"{trigger} failed: {ex.Message}";
+            operationalStatus.ReportFailure(
+                SquireOperationalStatusSource.Refresh,
+                $"{trigger} failed: {ex.Message}",
+                DateTimeOffset.UtcNow);
             automaticRefreshRequested = false;
             automaticRefreshTrigger = "Automatic refresh";
             nextAutomaticRefreshAt = DateTimeOffset.UtcNow.AddSeconds(5);
@@ -442,23 +465,87 @@ internal sealed class SquireTabPanel : IDisposable
 
     public void RefreshForBridge() => Refresh();
 
-    public AgentBridgeSquireTruth CreateAgentBridgeTruth() => SquireBridgeTruthFactory.Create(analysis, status, actionAdapter);
+    public AgentBridgeSquireTruth CreateAgentBridgeTruth() =>
+        SquireBridgeTruthFactory.Create(
+            analysis,
+            operationalStatus.Current(DateTimeOffset.UtcNow)?.Message ?? string.Empty,
+            actionAdapter);
 
-    private static bool ShouldDrawInlineStatus(SquireAnalysis? value, string currentStatus)
+    public SquireBridgeProductTruth CreateStandaloneBridgeTruth()
     {
-        if (value is null || value.Snapshot.Diagnostics.IsComplete)
-            return true;
-
-        var executable = value.Candidates.Count(candidate => candidate.IsExecutable);
-        return !string.Equals(currentStatus, BuildSnapshotStatus(value, executable), StringComparison.Ordinal);
+        var currentStatus = operationalStatus.Current(DateTimeOffset.UtcNow);
+        return new(
+            ResolveCleanupSurfaceState(analysis).ToString(),
+            analysis?.Snapshot.Identity.CapturedAt,
+            analysis?.Snapshot.Diagnostics.IsComplete == true,
+            analysis?.Candidates.Count ?? 0,
+            analysis?.Candidates.Count(candidate => candidate.IsExecutable) ?? 0,
+            review.Selections.Count,
+            hiddenBatchCount,
+            runConfirmed,
+            activeRun is { IsCompleted: false },
+            advisorSession.State.Stage.ToString(),
+            currentStatus?.Kind.ToString(),
+            currentStatus?.Source.ToString(),
+            currentStatus?.Message,
+            currentStatus?.CreatedAtUtc,
+            currentStatus?.ExpiresAtUtc);
     }
 
-    private static string BuildSnapshotStatus(SquireAnalysis value, int executable) =>
-        value.Snapshot.Identity.Scope is null
-            ? "Waiting for an active character."
-            : value.IsActionable
-                ? $"Complete snapshot; {executable} executable candidate(s)."
-                : "Snapshot is incomplete; actions are blocked.";
+    private static SquireCleanupSurfaceState ResolveCleanupSurfaceState(SquireAnalysis? value) =>
+        SquireCleanupSurfaceStateResolver.Resolve(
+            value is not null,
+            value?.Snapshot.Identity.Scope is not null,
+            value?.Snapshot.Diagnostics.IsComplete == true,
+            value?.Candidates.Count ?? 0);
+
+    private void DrawOperationalStatus()
+    {
+        var current = operationalStatus.Current(DateTimeOffset.UtcNow);
+        if (current is null)
+            return;
+
+        ImGui.SameLine();
+        var tone = current.Kind switch
+        {
+            SquireOperationalStatusKind.Success => DalamudUiTone.Success,
+            SquireOperationalStatusKind.Failure => DalamudUiTone.Error,
+            SquireOperationalStatusKind.Boundary => DalamudUiTone.Warning,
+            _ => DalamudUiTone.Neutral,
+        };
+        DalamudUiChrome.DrawBadge(current.Kind.ToString(), SquireUiTheme.Current.Palette, tone);
+        ImGui.SameLine();
+        ImGui.TextColored(SquireUiTheme.Current.Palette.Muted, current.Message);
+        if (!current.CanDismiss)
+            return;
+
+        ImGui.SameLine();
+        if (DalamudUiControls.Button(
+                "Dismiss##SquireOperationalStatus",
+                SquireUiTheme.Current,
+                DalamudUiTone.Neutral,
+                quiet: true))
+            operationalStatus.Dismiss(DateTimeOffset.UtcNow);
+        RegisterLastControl(
+            "squire.status.dismiss",
+            "Dismiss the current Squire operational message",
+            AgentBridgeUiControlKind.Button,
+            true,
+            false,
+            current.Kind.ToString(),
+            () => operationalStatus.Dismiss(DateTimeOffset.UtcNow));
+    }
+
+    private static void DrawWaitingForAnalysis()
+    {
+        ImGui.Spacing();
+        DalamudUiChrome.DrawCallout(
+            "SquireInitialAnalysisState",
+            "Preparing equipment analysis",
+            "Squire is obtaining the first current equipment snapshot. Cleanup controls will appear automatically when it is complete.",
+            SquireUiTheme.Current,
+            DalamudUiTone.Neutral);
+    }
 
     private static void DrawSummary(SquireAnalysis value)
     {
@@ -485,7 +572,7 @@ internal sealed class SquireTabPanel : IDisposable
             ? "Waiting for an active character"
             : "Equipment snapshot incomplete";
         var detail = waitingForCharacter
-            ? "Squire will resume equipment analysis automatically when character data becomes available."
+            ? "Squire will analyze equipment automatically as soon as character data becomes available. Your cleanup rules remain unchanged."
             : $"{incomplete.Length} data source(s) need attention. Cleanup stays blocked until Squire can verify them.";
         DalamudUiChrome.DrawCallout(
             "SquireSnapshotState",
@@ -524,8 +611,19 @@ internal sealed class SquireTabPanel : IDisposable
 
     private static void DrawDiagnostics(SquireAnalysis value)
     {
-        foreach (var diagnostic in value.Snapshot.Diagnostics.Components.Where(component => component.Status != Franthropy.Dalamud.Characters.SnapshotComponentStatus.Complete))
-            ImGui.TextColored(MarketMafiosoUiTheme.Error, $"{diagnostic.Component}: {diagnostic.Status} - {diagnostic.Message}");
+        var diagnostics = value.Snapshot.Diagnostics.Components
+            .Where(component => component.Status != Franthropy.Dalamud.Characters.SnapshotComponentStatus.Complete)
+            .ToArray();
+        if (!ImGui.BeginTable("##SquireSnapshotDiagnosticGrid", 2, ImGuiTableFlags.SizingStretchSame))
+            return;
+        foreach (var diagnostic in diagnostics)
+        {
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MarketMafiosoUiTheme.Error, diagnostic.Component.ToString());
+            ImGui.SameLine();
+            ImGui.TextWrapped($"— {diagnostic.Status}: {diagnostic.Message}");
+        }
+        ImGui.EndTable();
     }
 
     private void DrawTable(SquireAnalysis value)
@@ -941,11 +1039,14 @@ internal sealed class SquireTabPanel : IDisposable
             runConfirmed = false;
             runCancellation = new CancellationTokenSource();
             activeRun = RunAsync(plan, runCancellation.Token);
-            status = $"Started explicitly confirmed cleanup run for {plan.Actions.Count} item(s).";
+            operationalStatus.ReportProgress(
+                SquireOperationalStatusSource.Run,
+                $"Started explicitly confirmed cleanup run for {plan.Actions.Count} item(s).",
+                DateTimeOffset.UtcNow);
         }
         catch (Exception ex)
         {
-            status = $"Run blocked: {ex.Message}";
+            operationalStatus.ReportBoundary(SquireOperationalStatusSource.Run, $"Run blocked: {ex.Message}", DateTimeOffset.UtcNow);
         }
     }
 
@@ -975,7 +1076,10 @@ internal sealed class SquireTabPanel : IDisposable
             return;
         if (uiStateCapture.IsRecording)
         {
-            status = "Diagnostic run blocked: the catchall UI-state recorder is already active.";
+            operationalStatus.ReportBoundary(
+                SquireOperationalStatusSource.Run,
+                "Diagnostic run blocked: the catchall UI-state recorder is already active.",
+                DateTimeOffset.UtcNow);
             return;
         }
         try
@@ -991,11 +1095,14 @@ internal sealed class SquireTabPanel : IDisposable
                 ["snapshotGenerationId"] = plan.SnapshotGenerationId.ToString(),
             });
             activeRun = DiagnosticRunAsync(plan, runCancellation.Token);
-            status = $"Started destructive cleanup run with diagnostics for {plan.Actions.Count} item(s).";
+            operationalStatus.ReportProgress(
+                SquireOperationalStatusSource.Run,
+                $"Started destructive cleanup run with diagnostics for {plan.Actions.Count} item(s).",
+                DateTimeOffset.UtcNow);
         }
         catch (Exception ex)
         {
-            status = $"Diagnostic run blocked: {ex.Message}";
+            operationalStatus.ReportBoundary(SquireOperationalStatusSource.Run, $"Diagnostic run blocked: {ex.Message}", DateTimeOffset.UtcNow);
         }
     }
 
@@ -1015,7 +1122,7 @@ internal sealed class SquireTabPanel : IDisposable
                     ["itemId"] = runEvent.Item?.ItemId.ToString(),
                 });
                 if (runEvent.Kind is "DispositionGroupStart" or "DiagnosticActionStart")
-                    status = runEvent.Message;
+                    operationalStatus.ReportProgress(SquireOperationalStatusSource.Run, runEvent.Message, DateTimeOffset.UtcNow);
             });
             result = checkpointResume
                 ? await runner.ResumeFromCheckpointAsync(plan, diagnostic: true, cancellationToken: cancellationToken)
@@ -1035,9 +1142,16 @@ internal sealed class SquireTabPanel : IDisposable
         var auditPath = new SquireAuditLog(Path.Combine(diagnosticDirectory, "runs")).Write(plan, result, version);
         lastRun = SquireRunPresentation.Create(plan, result, auditPath);
         var captureName = Path.GetFileName(uiStateCapture.LastCapturePath);
-        status = result.Success
-            ? $"Diagnostic cleanup completed. Audit: {Path.GetFileName(auditPath)} | UI capture: {captureName}"
-            : $"Diagnostic cleanup stopped ({result.Code}). Audit: {Path.GetFileName(auditPath)} | UI capture: {captureName}";
+        if (result.Success)
+            operationalStatus.ReportSuccess(
+                SquireOperationalStatusSource.Run,
+                $"Diagnostic cleanup completed. Audit: {Path.GetFileName(auditPath)} | UI capture: {captureName}",
+                DateTimeOffset.UtcNow);
+        else
+            operationalStatus.ReportFailure(
+                SquireOperationalStatusSource.Run,
+                $"Diagnostic cleanup stopped ({result.Code}). Audit: {Path.GetFileName(auditPath)} | UI capture: {captureName}",
+                DateTimeOffset.UtcNow);
     }
 
     private async Task RunAsync(SquireActionPlan plan, CancellationToken cancellationToken, bool checkpointResume = false)
@@ -1047,7 +1161,7 @@ internal sealed class SquireTabPanel : IDisposable
             var runner = new SquireRunner(actionAdapter, runEvent =>
             {
                 if (runEvent.Kind is "DispositionGroupStart" or "ActionStart")
-                    status = runEvent.Message;
+                    operationalStatus.ReportProgress(SquireOperationalStatusSource.Run, runEvent.Message, DateTimeOffset.UtcNow);
             });
             var result = checkpointResume
                 ? await runner.ResumeFromCheckpointAsync(plan, diagnostic: false, cancellationToken: cancellationToken)
@@ -1057,9 +1171,10 @@ internal sealed class SquireTabPanel : IDisposable
                 ?? "unknown";
             var auditPath = new SquireAuditLog(Path.Combine(diagnosticDirectory, "runs")).Write(plan, result, version);
             lastRun = SquireRunPresentation.Create(plan, result, auditPath);
-            status = result.Success
-                ? $"Run completed. Audit: {Path.GetFileName(auditPath)}"
-                : $"Run stopped ({result.Code}). Audit: {Path.GetFileName(auditPath)}";
+            if (result.Success)
+                operationalStatus.ReportSuccess(SquireOperationalStatusSource.Run, $"Run completed. Audit: {Path.GetFileName(auditPath)}", DateTimeOffset.UtcNow);
+            else
+                operationalStatus.ReportFailure(SquireOperationalStatusSource.Run, $"Run stopped ({result.Code}). Audit: {Path.GetFileName(auditPath)}", DateTimeOffset.UtcNow);
         }
         finally
         {
@@ -1086,7 +1201,10 @@ internal sealed class SquireTabPanel : IDisposable
         var checkpointPlan = run.CreateCheckpointPlan();
         if (run.WasDiagnostic && uiStateCapture.IsRecording)
         {
-            status = "Checkpoint retry blocked: the catchall UI-state recorder is already active.";
+            operationalStatus.ReportBoundary(
+                SquireOperationalStatusSource.Run,
+                "Checkpoint retry blocked: the catchall UI-state recorder is already active.",
+                DateTimeOffset.UtcNow);
             return;
         }
 
@@ -1107,7 +1225,10 @@ internal sealed class SquireTabPanel : IDisposable
         {
             activeRun = RunAsync(checkpointPlan, runCancellation.Token, checkpointResume: true);
         }
-        status = $"Retrying {checkpointPlan.Actions.Count} item(s) from the last approved checkpoint. Completed actions will not repeat.";
+        operationalStatus.ReportProgress(
+            SquireOperationalStatusSource.Run,
+            $"Retrying {checkpointPlan.Actions.Count} item(s) from the last approved checkpoint. Completed actions will not repeat.",
+            DateTimeOffset.UtcNow);
     }
 
     private void RecoverLastRunInteraction()
@@ -1119,9 +1240,12 @@ internal sealed class SquireTabPanel : IDisposable
 
     private async Task RecoverLastRunInteractionAsync()
     {
-        status = "Recovering Squire's owned interaction...";
+        operationalStatus.ReportProgress(SquireOperationalStatusSource.Recovery, "Recovering Squire's owned interaction...", DateTimeOffset.UtcNow);
         var result = await actionAdapter.RecoverOwnedStateAsync(CancellationToken.None).ConfigureAwait(false);
-        status = result.Message;
+        if (result.Success)
+            operationalStatus.ReportSuccess(SquireOperationalStatusSource.Recovery, result.Message, DateTimeOffset.UtcNow);
+        else
+            operationalStatus.ReportFailure(SquireOperationalStatusSource.Recovery, result.Message, DateTimeOffset.UtcNow);
         if (result.Success)
         {
             lastRun = null;
@@ -1139,7 +1263,7 @@ internal sealed class SquireTabPanel : IDisposable
         }
         catch (Exception ex)
         {
-            status = $"Could not open the audit location: {ex.Message}";
+            operationalStatus.ReportFailure(SquireOperationalStatusSource.Audit, $"Could not open the audit location: {ex.Message}", DateTimeOffset.UtcNow);
         }
     }
 
@@ -1150,11 +1274,11 @@ internal sealed class SquireTabPanel : IDisposable
             Directory.CreateDirectory(diagnosticDirectory);
             var path = Path.Combine(diagnosticDirectory, $"squire-snapshot-{DateTime.UtcNow:yyyyMMdd-HHmmss}.json");
             File.WriteAllText(path, JsonConvert.SerializeObject(analysis, Formatting.Indented));
-            status = $"Exported {Path.GetFileName(path)}";
+            operationalStatus.ReportSuccess(SquireOperationalStatusSource.Export, $"Exported {Path.GetFileName(path)}", DateTimeOffset.UtcNow);
         }
         catch (Exception ex)
         {
-            status = $"Export failed: {ex.Message}";
+            operationalStatus.ReportFailure(SquireOperationalStatusSource.Export, $"Export failed: {ex.Message}", DateTimeOffset.UtcNow);
         }
     }
 

@@ -1,5 +1,7 @@
 using Squire.AgentBridge;
 using Franthropy.Dalamud.AgentBridge;
+using System.Numerics;
+using System.Text.Json;
 using Xunit;
 
 namespace Squire.Tests;
@@ -44,5 +46,44 @@ public sealed class AgentBridgeProviderTests
         Assert.Equal("quality:hq", truth.Product.CandidateFilterExpression);
         Assert.True(truth.Product.CandidateFilterValid);
         Assert.Equal(2, truth.Product.VisibleCandidateCount);
+    }
+
+    [Fact]
+    public void Provider_forwards_typed_reviewed_control_arguments()
+    {
+        var expression = string.Empty;
+        var registry = new AgentBridgeUiReviewRegistry();
+        registry.BeginFrame();
+        registry.Register(
+            "squire.cleanup.filter",
+            "Filter Cleanup candidates",
+            AgentBridgeUiControlKind.Input,
+            Vector2.Zero,
+            Vector2.One,
+            enabled: true,
+            selected: false,
+            value: string.Empty,
+            new AgentBridgeActionArgumentSchema(
+                [new("expression", AgentBridgeActionArgumentKind.String, Required: false)]),
+            arguments =>
+            {
+                expression = arguments?.GetProperty("expression").GetString() ?? string.Empty;
+                return AgentBridgeUiActionResult.Ok("Cleanup filter updated.");
+            });
+        var frame = registry.EndFrame();
+        var provider = new SquireBridgeProvider(
+            () => throw new InvalidOperationException(),
+            () => { },
+            () => { },
+            registry);
+        using var document = JsonDocument.Parse("{\"expression\":\"name:copper\"}");
+
+        var result = provider.InvokeControl(
+            "squire.cleanup.filter",
+            frame.FrameId,
+            document.RootElement.Clone());
+
+        Assert.True(result.Success);
+        Assert.Equal("name:copper", expression);
     }
 }

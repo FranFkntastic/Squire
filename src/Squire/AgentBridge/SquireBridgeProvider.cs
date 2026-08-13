@@ -1,4 +1,5 @@
 using Franthropy.Dalamud.AgentBridge;
+using System.Text.Json;
 
 namespace Squire.AgentBridge;
 
@@ -90,7 +91,11 @@ public sealed class SquireBridgeProvider
     public IReadOnlyList<AgentBridgeCaptureSurfaceDescriptor> GetCaptureSurfaces() => CaptureSurfaces;
     public AgentBridgeUiReviewFrame GetControlSurface() => reviewRegistry.Snapshot();
     public AgentBridgeUiControlReview ReviewControl(string controlId) => reviewRegistry.Review(controlId);
-    public AgentBridgeUiControlInvocation InvokeControl(string controlId, long frameId) => reviewRegistry.Invoke(controlId, frameId);
+    public AgentBridgeUiControlInvocation InvokeControl(
+        string controlId,
+        long frameId,
+        JsonElement? arguments = null) =>
+        reviewRegistry.Invoke(controlId, frameId, arguments);
 
     public bool TryOpenMainWindow(string target)
     {

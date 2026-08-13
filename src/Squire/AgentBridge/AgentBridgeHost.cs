@@ -140,7 +140,9 @@ public sealed class AgentBridgeHost : IDisposable
                 if (request.FrameId is not { } frameId)
                     return AgentBridgeResponse.Fail("A rendered frame id is required.");
                 AgentBridgeUiControlInvocation? invocation = null;
-                await dispatchOnFramework(() => invocation = provider.InvokeControl(request.Target ?? string.Empty, frameId), cancellationToken).ConfigureAwait(false);
+                await dispatchOnFramework(
+                    () => invocation = provider.InvokeControl(request.Target ?? string.Empty, frameId, request.Arguments),
+                    cancellationToken).ConfigureAwait(false);
                 return invocation!.Success
                     ? AgentBridgeResponse.Ok(invocation.Message, invocation)
                     : new AgentBridgeResponse { Success = false, Message = invocation.Message, Receipt = invocation };

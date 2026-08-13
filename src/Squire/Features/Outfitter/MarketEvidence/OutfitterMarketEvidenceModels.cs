@@ -50,7 +50,8 @@ public sealed record OutfitterMarketEvidenceRequest(
     int ListingLimit = 100,
     OutfitterMarketCoverageMode CoverageMode = OutfitterMarketCoverageMode.ExhaustiveWithinScope,
     int? SampleSize = null,
-    int MaxConcurrency = 4);
+    int MaxConcurrency = 4,
+    IReadOnlyList<uint>? SampleItemIds = null);
 
 public sealed record OutfitterMarketEvidenceCacheKey(
     string SourceKey,
@@ -117,9 +118,11 @@ public sealed record OutfitterMarketEvidenceBook(
             .Order()
             .ToArray();
         if (request.CoverageMode == OutfitterMarketCoverageMode.Sampled)
-            requestedIds = requestedIds
-                .Take(Math.Clamp(request.SampleSize ?? 1, 1, Math.Max(1, requestedIds.Length)))
-                .ToArray();
+            requestedIds = request.SampleItemIds is { Count: > 0 }
+                ? request.SampleItemIds.Distinct().Order().ToArray()
+                : requestedIds
+                    .Take(Math.Clamp(request.SampleSize ?? 1, 1, Math.Max(1, requestedIds.Length)))
+                    .ToArray();
         return IsPublishable &&
                string.Equals(SourceKey, request.SourceKey.Trim(), StringComparison.OrdinalIgnoreCase) &&
                string.Equals(Region, request.Region.Trim(), StringComparison.OrdinalIgnoreCase) &&

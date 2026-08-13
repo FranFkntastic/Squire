@@ -28,8 +28,8 @@ public sealed class UniversalisMarketAcquisitionPlanSource : IMarketAcquisitionB
         this.baseUri = baseUri;
         bulkClient = new(httpClient, baseUri, new()
         {
-            ChunkSize = 100,
-            MaxConcurrentRequests = 4,
+            ChunkSize = 25,
+            MaxConcurrentRequests = UniversalisBulkClient.DefaultMaxConcurrentRequests,
             MaxAttemptsPerChunk = 1,
             MaximumSplitDepth = 1,
             RetryMissingItems = false,

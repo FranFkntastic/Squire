@@ -513,21 +513,32 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             "owned inventory is not yet observed",
             ownershipCoverage,
             StringComparison.Ordinal);
+        var marketScope = AdvisorMarketScopeSelector.Select(offers);
+        var sampledMarket = marketScope.Count < offers.MarketItemIds.Count;
+        if (sampledMarket)
+        {
+            coverageLabel +=
+                $" Market discovery samples {marketScope.Count:N0} of {offers.MarketItemIds.Count:N0} eligible items, prioritizing the highest-level options across every equipment slot; owned and gil-vendor options remain complete.";
+        }
         discoveryRequest = new(
             "universalis",
             Region,
             offers.MarketItemIds,
             ListingLimit: AdvisorMarketListingLimit,
-            CoverageMode: OutfitterMarketCoverageMode.ExhaustiveWithinScope,
-            MaxConcurrency: 4);
+            CoverageMode: sampledMarket
+                ? OutfitterMarketCoverageMode.Sampled
+                : OutfitterMarketCoverageMode.ExhaustiveWithinScope,
+            SampleSize: sampledMarket ? marketScope.Count : null,
+            MaxConcurrency: 4,
+            SampleItemIds: sampledMarket ? marketScope : null);
         discoveryTask = marketDiscovery.DiscoverAsync(discoveryRequest, cancellation!.Token);
         State = State with
         {
             Stage = MinerBotanistAdvisorSessionStage.DiscoveringMarket,
-            Message = $"Player baseline captured in one framework tick; discovering exact NQ/HQ listings for {offers.MarketItemIds.Count:N0} scoped items.",
+            Message = $"Player baseline captured in one framework tick; discovering exact NQ/HQ listings for {marketScope.Count:N0} scoped items.",
             CoverageLabel = coverageLabel,
             Completed = 0,
-            Total = offers.MarketItemIds.Count,
+            Total = marketScope.Count,
             UpdatedAtUtc = DateTimeOffset.UtcNow,
         };
     }

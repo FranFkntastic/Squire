@@ -347,6 +347,30 @@ public sealed class OutfitterMarketEvidenceDiscoveryServiceTests
         Assert.Equal(OutfitterMarketEvidenceGenerationStatus.Complete, result.WorkingBook.Status);
     }
 
+    [Fact]
+    public async Task Explicit_sample_ids_drive_sampled_generation()
+    {
+        var source = new StubBulkListingSource();
+        var service = new OutfitterMarketEvidenceDiscoveryService(source, Cache(), utcNow: () => Now);
+        var request = new OutfitterMarketEvidenceRequest(
+            "universalis",
+            "North America",
+            [1, 2, 3, 4, 5],
+            20,
+            OutfitterMarketCoverageMode.Sampled,
+            SampleSize: 2,
+            MaxConcurrency: 3,
+            SampleItemIds: [2, 5]);
+
+        var result = await service.DiscoverAsync(request, CancellationToken.None);
+
+        Assert.Equal([2u, 5u], Assert.Single(source.BulkRequests));
+        Assert.Equal(5, result.WorkingBook.Coverage.CatalogItemCount);
+        Assert.Equal(2, result.WorkingBook.Coverage.QueriedItemCount);
+        Assert.Equal([2u, 5u], result.WorkingBook.Coverage.QueriedItemIds);
+        Assert.True(result.WorkingBook.Matches(request));
+    }
+
     private static OutfitterMarketEvidenceCache Cache() => new(TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(30));
 
     private static OutfitterMarketEvidenceRequest Request(

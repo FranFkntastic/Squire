@@ -86,7 +86,9 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
         var now = utcNow();
         var catalog = request.ItemIds.Where(itemId => itemId != 0).Distinct().Order().ToArray();
         var selected = request.CoverageMode == OutfitterMarketCoverageMode.Sampled
-            ? catalog.Take(Math.Clamp(request.SampleSize ?? 1, 1, Math.Max(1, catalog.Length))).ToArray()
+            ? request.SampleItemIds is { Count: > 0 }
+                ? request.SampleItemIds.Distinct().Order().ToArray()
+                : catalog.Take(Math.Clamp(request.SampleSize ?? 1, 1, Math.Max(1, catalog.Length))).ToArray()
             : catalog;
         var coverage = new OutfitterMarketCoverage(
             request.CoverageMode,
@@ -523,6 +525,7 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
         request.CoverageMode,
         request.SampleSize,
         request.MaxConcurrency,
+        string.Join(',', (request.SampleItemIds ?? []).Where(value => value != 0).Distinct().Order()),
         string.Join(',', request.ItemIds.Where(value => value != 0).Distinct().Order()));
 
     private static void Validate(OutfitterMarketEvidenceRequest request)
@@ -535,5 +538,16 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
             throw new ArgumentOutOfRangeException(nameof(request.MaxConcurrency));
         if (request.CoverageMode == OutfitterMarketCoverageMode.Sampled && request.SampleSize is null or <= 0)
             throw new ArgumentOutOfRangeException(nameof(request.SampleSize), "Sampled discovery requires an explicit positive sample size.");
+        if (request.SampleItemIds is { Count: > 0 } sampleItemIds)
+        {
+            if (request.CoverageMode != OutfitterMarketCoverageMode.Sampled)
+                throw new ArgumentException("Explicit sample item ids require sampled discovery.", nameof(request));
+            var sample = sampleItemIds.Where(value => value != 0).Distinct().ToArray();
+            if (sample.Length != sampleItemIds.Count || sample.Length != request.SampleSize)
+                throw new ArgumentException("Explicit sample item ids must be non-zero, unique, and match the sample size.", nameof(request));
+            var catalog = request.ItemIds.Where(value => value != 0).ToHashSet();
+            if (sample.Any(itemId => !catalog.Contains(itemId)))
+                throw new ArgumentException("Explicit sample item ids must belong to the requested catalog.", nameof(request));
+        }
     }
 }

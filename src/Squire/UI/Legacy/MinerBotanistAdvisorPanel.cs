@@ -943,14 +943,14 @@ internal sealed class MinerBotanistAdvisorPanel
         ImGui.SameLine();
         ImGui.TextDisabled(frontierPresentation.TotalExactCount == frontierPresentation.Count
             ? $"{selectedIndex + 1:N0} / {frontierPresentation.Count:N0}"
-            : $"{selectedIndex + 1:N0} / {frontierPresentation.Count:N0} choices Â· {frontierPresentation.TotalExactCount:N0} exact loadouts");
+            : $"{selectedIndex + 1:N0} / {frontierPresentation.Count:N0} choices | {frontierPresentation.TotalExactCount:N0} exact loadouts");
         if (!ImGui.BeginTable("##SquireAdvisorRail", 4,
                 ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingStretchProp,
                 new Vector2(0, Math.Min(150f, 30f + frontierWindow.Solutions.Count * 25f))))
             return;
         ImGui.TableSetupColumn(selected.AcquisitionCostEstimate is null ? "Cost" : "Expected cost", ImGuiTableColumnFlags.WidthFixed, 105f);
         ImGui.TableSetupColumn("Utility", ImGuiTableColumnFlags.WidthFixed, 75f);
-        ImGui.TableSetupColumn("Authority", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Gain", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableSetupColumn("Burden", ImGuiTableColumnFlags.WidthFixed, 120f);
         foreach (var solution in frontierWindow.Solutions)
         {
@@ -974,11 +974,29 @@ internal sealed class MinerBotanistAdvisorPanel
             ImGui.TableNextColumn();
             var authority = advice.AuthorityBySolutionId[solution.Candidate.SolutionId];
             ImGui.TextColored(authority.AdvisorMayConsider ? MarketMafiosoUiTheme.Success : MarketMafiosoUiTheme.Warning,
-                authority.AdvisorMayConsider ? "Supported capability" : "Visible, not nominated");
+                AuthorityLabel(authority));
             ImGui.TableNextColumn();
             ImGui.TextUnformatted($"{solution.Burden.PurchaseTransactions} buy · {solution.Burden.WorldVisits} world");
         }
         ImGui.EndTable();
+    }
+
+    private static string AuthorityLabel(AdvisorAuthorityAssessment authority)
+    {
+        if (!authority.AdvisorMayConsider)
+            return "Doesn't meet the no-loss rule";
+        if (authority.GainedCapabilityIds.Count == 0)
+            return "No-loss improvement";
+        return string.Join(", ", authority.GainedCapabilityIds.Select(id => id switch
+        {
+            "no-loss-strength-gain" => "Strength",
+            "no-loss-physical-damage-gain" => "Weapon damage",
+            "no-loss-vitality-gain" => "Vitality",
+            "no-loss-physical-defense-gain" => "Physical defense",
+            "no-loss-magical-defense-gain" => "Magical defense",
+            "no-loss-tenacity-gain" => "Tenacity",
+            _ => id.Replace('-', ' '),
+        }));
     }
 
     private void DrawAdjacentTradeoffs(MinerBotanistReadOnlyAdvice advice)

@@ -247,7 +247,7 @@ public sealed class Plugin : IDalamudPlugin
     });
 
     private SquireBridgeTruth CreateBridgeTruth() => new(
-        4,
+        5,
         configuration.PluginInstanceId,
         Environment.ProcessId,
         GetType().Assembly.GetName().Version?.ToString() ?? "unknown",

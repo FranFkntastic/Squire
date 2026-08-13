@@ -405,7 +405,7 @@ internal sealed class MinerBotanistAdvisorPanel
     {
         EnsureTargets();
         ImGui.SetNextItemWidth(230f);
-        var preview = selectedTarget is null ? "Current equipped job" : selectedTarget.Name;
+        var preview = TargetLabel(selectedTarget);
         if (ImGui.BeginCombo("Target##SquireAdvisorTarget", preview))
         {
             if (ImGui.Selectable("Current equipped job", selectedTarget is null) && !state.IsBusy)
@@ -415,7 +415,7 @@ internal sealed class MinerBotanistAdvisorPanel
                 var enabled = target.IsReady && target.Kind != OutfitterTargetKind.Retainer && !state.IsBusy;
                 if (!enabled)
                     ImGui.BeginDisabled();
-                if (ImGui.Selectable($"{target.Name}##{target.Key}", selectedTarget?.Key == target.Key) && enabled)
+                if (ImGui.Selectable($"{TargetLabel(target)}##{target.Key}", selectedTarget?.Key == target.Key) && enabled)
                     SelectTarget(target);
                 if (!enabled)
                     ImGui.EndDisabled();
@@ -470,6 +470,30 @@ internal sealed class MinerBotanistAdvisorPanel
             targetStatus = $"Target discovery stopped safely: {exception.Message}";
         }
     }
+
+    internal string SelectedTargetKey => selectedTarget?.Key ?? "active-loadout";
+    internal string SelectedTargetKind => selectedTarget?.Kind.ToString() ?? "ActiveLoadout";
+    internal string SelectedTargetLabel => TargetLabel(selectedTarget);
+    internal int TargetCount
+    {
+        get
+        {
+            EnsureTargets();
+            return 1 + (targets?.Count ?? 0);
+        }
+    }
+    internal int ReadyTargetCount
+    {
+        get
+        {
+            EnsureTargets();
+            return 1 + (targets?.Count(target => target.IsReady) ?? 0);
+        }
+    }
+
+    private static string TargetLabel(OutfitterTarget? target) => target is null
+        ? "Current equipped job"
+        : $"{target.Name} Â· {target.Subtitle}";
 
     private void SelectTarget(OutfitterTarget? target)
     {

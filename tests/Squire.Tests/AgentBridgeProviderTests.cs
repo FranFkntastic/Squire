@@ -27,6 +27,7 @@ public sealed class AgentBridgeProviderTests
                 new SquireBridgeProductTruth(
                     "WaitingForAnalysis", null, false, 0, 0, 0, 0, false, false,
                     "Idle", "Ready to evaluate.", 3, 7, DateTimeOffset.UnixEpoch,
+                    "active-loadout", "ActiveLoadout", "Current equipped job", 4, 3,
                     null, null, null, null, null,
                     "quality:hq", true, 2,
                     new SquireBridgeSettingsTruth("safety", true, true, false, true, 30, false, false, true, true, 90, false, true, true, true, true, false, false, false))),
@@ -48,6 +49,11 @@ public sealed class AgentBridgeProviderTests
         Assert.Equal(3, truth.Product.AdvisorCompleted);
         Assert.Equal(7, truth.Product.AdvisorTotal);
         Assert.Equal(DateTimeOffset.UnixEpoch, truth.Product.AdvisorUpdatedAtUtc);
+        Assert.Equal("active-loadout", truth.Product.AdvisorTargetKey);
+        Assert.Equal("ActiveLoadout", truth.Product.AdvisorTargetKind);
+        Assert.Equal("Current equipped job", truth.Product.AdvisorTargetLabel);
+        Assert.Equal(4, truth.Product.AdvisorTargetCount);
+        Assert.Equal(3, truth.Product.AdvisorReadyTargetCount);
         Assert.Null(truth.Product.OperationalStatusKind);
         Assert.Equal("quality:hq", truth.Product.CandidateFilterExpression);
         Assert.True(truth.Product.CandidateFilterValid);

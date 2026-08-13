@@ -36,7 +36,11 @@ public sealed class OutfitterTargetCatalog
                 CultureInfo.InvariantCulture.TextInfo.ToTitleCase(job.Name),
                 $"{job.Abbreviation} · Lv. {job.Level:N0} · {gearsets.Length:N0} gearset{(gearsets.Length == 1 ? string.Empty : "s")}",
                 Job: job,
-                Gearset: gearsets.FirstOrDefault()));
+                Gearset: gearsets.FirstOrDefault(),
+                IsReady: gearsets.Length > 0,
+                Diagnostic: gearsets.Length > 0
+                    ? null
+                    : "This unlocked job has no saved gearset, so Squire has no inactive equipment target to evaluate."));
             foreach (var gearset in gearsets)
             {
                 targets.Add(new(

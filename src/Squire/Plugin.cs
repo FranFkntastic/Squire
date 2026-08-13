@@ -16,6 +16,7 @@ using MarketMafioso.Diagnostics;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Squire;
 using MarketMafioso.Squire.Observation;
+using MarketMafioso.Squire.Outfitter;
 using MarketMafioso.Windows.Squire;
 
 namespace Squire;
@@ -150,6 +151,7 @@ public sealed class Plugin : IDalamudPlugin
             DataManager,
             listingSource,
             new DalamudPlayerAdvisorBaselineSource(snapshotSource, PlayerState, DataManager),
+            new AutoRetainerOutfitterMetadataSource(pluginInterface, Log),
             advisorCharacterSource.Capture,
             () => configuration.ActiveMarketAcquisitionRequestDocument?.Region
                   ?? configuration.ActiveMarketAcquisitionClaim?.Region

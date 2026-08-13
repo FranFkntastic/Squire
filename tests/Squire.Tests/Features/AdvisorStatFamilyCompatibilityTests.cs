@@ -34,7 +34,7 @@ public sealed class AdvisorStatFamilyCompatibilityTests
     }
 
     [Fact]
-    public void MarauderResolvesToTankWhilePaladinWaitsForShieldEvidence()
+    public void MarauderAndPaladinResolveToTheirExactTankModels()
     {
         Assert.Same(
             TankAdvisorStatFamily.Instance,
@@ -42,7 +42,11 @@ public sealed class AdvisorStatFamilyCompatibilityTests
         Assert.Same(
             TankAdvisorStatFamily.GeneralCombatContext,
             TankAdvisorStatFamily.Instance.ResolveContext("unknown-legacy-context"));
-        Assert.Null(AdvisorStatFamilies.Resolve(19));
+        var paladin = AdvisorStatFamilies.Resolve(19);
+        Assert.NotNull(paladin);
+        Assert.Equal("Tank", paladin.FamilyLabel);
+        Assert.Contains(Franthropy.Dalamud.Equipment.EquipmentStatSemantic.BlockStrength, paladin.RelevantSemantics);
+        Assert.Contains(Franthropy.Dalamud.Equipment.EquipmentStatSemantic.BlockRate, paladin.RelevantSemantics);
     }
 
 }

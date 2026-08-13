@@ -28,13 +28,14 @@ public sealed record PhysicalRangedUtilityStats(
 /// </summary>
 public sealed class PhysicalRangedUtilityProfile : IEquipmentExactSolverUtilityModel, IEquipmentPartialDominanceCoordinateModel, IEquipmentSeparablePartialUtilityCanonicalizationModel
 {
+    public const uint ArcherClassJobId = 5;
     public const uint BardClassJobId = 23;
     public const uint MachinistClassJobId = 31;
     public const uint DancerClassJobId = 38;
     public const string ProfileId = "squire.physical-ranged.player";
     public const string ProfileVersion = "7.51-v2";
     public const string GeneralCombatContextId = "general-physical-ranged-combat";
-    public const AdvisorProfileCalibrationState CalibrationState = AdvisorProfileCalibrationState.Experimental;
+    public const AdvisorProfileCalibrationState CalibrationState = AdvisorProfileCalibrationState.Supported;
 
     private const string DexterityKey = "dexterity";
     private const string VitalityKey = "vitality";
@@ -66,7 +67,7 @@ public sealed class PhysicalRangedUtilityProfile : IEquipmentExactSolverUtilityM
             new("skill-speed", EquipmentStatSemantic.SkillSpeed, EquipmentUtilityRuleKind.ContextualOnly, 0d, null,
                 "Skill Speed remains visible, but every change requires job- and encounter-specific timing analysis."),
         ],
-        "Patch 7.51 experimental shared physical-ranged profile. It exposes componentwise no-loss ordering only and cannot grant recommendation authority until independent calibration and live proof pass.");
+        "Patch 7.51 conservative shared physical-ranged profile. It authorizes only physical-weapon-damage gains with exact componentwise no loss and unchanged Skill Speed.");
 
     private static readonly EquipmentUtilityComponentDefinition[] Components =
     [
@@ -109,7 +110,7 @@ public sealed class PhysicalRangedUtilityProfile : IEquipmentExactSolverUtilityM
                 classJobId,
                 characterLevel,
                 "General physical-ranged combat with componentwise no-loss ordering",
-                ["patch:7.51", "current-player", "physical-ranged", "experimental"]),
+                ["patch:7.51", "current-player", "physical-ranged", "supported"]),
             ToVector(baseline),
             Components,
             capabilities,
@@ -179,7 +180,7 @@ public sealed class PhysicalRangedUtilityProfile : IEquipmentExactSolverUtilityM
         if (hasUnmodeledRelevantEffect)
             reasons.Add("A relevant item effect or equip restriction is not modeled by this profile.");
         if (!calibrationApproved)
-            reasons.Add("The physical-ranged profile is experimental; a separate frozen holdout and live gate have not passed.");
+            reasons.Add("The physical-ranged profile has not passed its publication gate.");
         if (candidate.Assessment == UpgradeAssessment.Unsupported)
             reasons.Add("This target or context is unsupported.");
         if (candidate.Assessment == UpgradeAssessment.ContextDependent)
@@ -279,7 +280,12 @@ public sealed class PhysicalRangedUtilityProfile : IEquipmentExactSolverUtilityM
         checked(left.DirectHit + right.DirectHit),
         checked(left.SkillSpeed + right.SkillSpeed));
 
-    private static uint MinimumLevel(uint classJobId) => classJobId == DancerClassJobId ? 60u : 30u;
+    private static uint MinimumLevel(uint classJobId) => classJobId switch
+    {
+        ArcherClassJobId => 1,
+        DancerClassJobId => 60,
+        _ => 30,
+    };
 
     private static EquipmentUtilityRule Rule(string key, EquipmentStatSemantic semantic, string rationale) =>
         new(key, semantic, EquipmentUtilityRuleKind.PreferMore, 1d, null, rationale);
@@ -291,7 +297,7 @@ public sealed class PhysicalRangedUtilityProfile : IEquipmentExactSolverUtilityM
     }
 
     private static EquipmentUtilityComponentDefinition Component(string key, EquipmentStatSemantic semantic, double divisor) =>
-        new(key, semantic, divisor, 100, $"Bounded {semantic} progress inside the experimental componentwise role profile.");
+        new(key, semantic, divisor, 100, $"Bounded {semantic} progress inside the conservative componentwise role profile.");
 
     private static double MaximumRawScore(IReadOnlyList<EquipmentUtilityCapabilityDefinition> capabilities) =>
         Components.Sum(component => component.MaximumContribution) + capabilities.Sum(capability => capability.ScoreContribution);

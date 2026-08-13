@@ -13,6 +13,7 @@ using Franthropy.Dalamud.UI.Styling;
 using MarketMafioso.AgentBridge;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Squire;
+using MarketMafioso.Squire.Outfitter;
 using MarketMafioso.Squire.Outfitter.Crafting;
 using MarketMafioso.Squire.Outfitter.Utility;
 using MarketMafioso.Squire.Outfitter.Acquisition;
@@ -32,6 +33,7 @@ internal sealed class MinerBotanistAdvisorPanel
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly Action<OutfitterWorkbenchTransfer> stageTransfer;
     private readonly IMarketAcquisitionListingSource listingSource;
+    private readonly Func<IReadOnlyList<OutfitterTarget>> captureTargets;
     private readonly Func<AdvisorCharacterSubject> captureCharacter;
     private readonly Func<string> resolveRegion;
     private readonly ParetoFrontierPlotBuilder plotBuilder = new();
@@ -46,6 +48,9 @@ internal sealed class MinerBotanistAdvisorPanel
     private string? selectedSolutionId;
     private string? handoffStatus;
     private AdvisorFrontierView frontierView = AdvisorFrontierView.Solutions;
+    private IReadOnlyList<OutfitterTarget>? targets;
+    private OutfitterTarget? selectedTarget;
+    private string? targetStatus;
 #if DEBUG
     private static readonly MinerBotanistAdvisorSyntheticScenarioKind[] SyntheticScenarioOrder =
     [
@@ -70,6 +75,7 @@ internal sealed class MinerBotanistAdvisorPanel
         MinerBotanistAdvisorSession session,
         AgentBridgeUiReviewRegistry reviewRegistry,
         IMarketAcquisitionListingSource listingSource,
+        Func<IReadOnlyList<OutfitterTarget>> captureTargets,
         Func<AdvisorCharacterSubject> captureCharacter,
         Func<string> resolveRegion,
         Action<OutfitterWorkbenchTransfer> stageTransfer)
@@ -78,6 +84,7 @@ internal sealed class MinerBotanistAdvisorPanel
         this.session = session ?? throw new ArgumentNullException(nameof(session));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
         this.listingSource = listingSource ?? throw new ArgumentNullException(nameof(listingSource));
+        this.captureTargets = captureTargets ?? throw new ArgumentNullException(nameof(captureTargets));
         this.captureCharacter = captureCharacter ?? throw new ArgumentNullException(nameof(captureCharacter));
         this.resolveRegion = resolveRegion ?? throw new ArgumentNullException(nameof(resolveRegion));
         this.stageTransfer = stageTransfer ?? throw new ArgumentNullException(nameof(stageTransfer));
@@ -101,7 +108,7 @@ internal sealed class MinerBotanistAdvisorPanel
             ? syntheticReviewAdvice
             : syntheticReviewActive ? null : displayedAdvice;
 #endif
-        var subject = captureCharacter();
+        var subject = SubjectForSelectedTarget(captureCharacter());
 #if DEBUG
         if (syntheticReviewActive)
             subject = new(true, MinerBotanistUtilityProfile.MinerClassJobId, "MIN", 100);
@@ -259,6 +266,8 @@ internal sealed class MinerBotanistAdvisorPanel
         AdvisorWorkspacePresentation presentation,
         AdvisorCharacterSubject subject)
     {
+        DrawTargetSelector(state);
+        ImGui.SameLine();
         var family = subject.ClassJobId is { } classJobId ? AdvisorStatFamilies.Resolve(classJobId) : null;
         var contexts = family?.ProfileDescriptor.Contexts ?? [];
         var selectedContext = family?.ResolveContext(context.Id) ?? context;
@@ -392,6 +401,100 @@ internal sealed class MinerBotanistAdvisorPanel
 #endif
     }
 
+    private void DrawTargetSelector(MinerBotanistAdvisorSessionState state)
+    {
+        EnsureTargets();
+        ImGui.SetNextItemWidth(230f);
+        var preview = selectedTarget is null ? "Current equipped job" : selectedTarget.Name;
+        if (ImGui.BeginCombo("Target##SquireAdvisorTarget", preview))
+        {
+            if (ImGui.Selectable("Current equipped job", selectedTarget is null) && !state.IsBusy)
+                SelectTarget(null);
+            foreach (var target in targets ?? [])
+            {
+                var enabled = target.IsReady && target.Kind != OutfitterTargetKind.Retainer && !state.IsBusy;
+                if (!enabled)
+                    ImGui.BeginDisabled();
+                if (ImGui.Selectable($"{target.Name}##{target.Key}", selectedTarget?.Key == target.Key) && enabled)
+                    SelectTarget(target);
+                if (!enabled)
+                    ImGui.EndDisabled();
+                if (ImGui.IsItemHovered() && !string.IsNullOrWhiteSpace(target.Diagnostic))
+                    ImGui.SetTooltip(target.Diagnostic);
+            }
+            ImGui.EndCombo();
+        }
+        var minimum = ImGui.GetItemRectMin();
+        var maximum = ImGui.GetItemRectMax();
+        reviewRegistry.Register(
+            "squire.outfitter.target.active",
+            "Evaluate the current equipped job",
+            AgentBridgeUiControlKind.Select,
+            minimum,
+            maximum,
+            !state.IsBusy,
+            selectedTarget is null,
+            "active-loadout",
+            () => SelectTarget(null));
+        foreach (var target in targets ?? [])
+        {
+            var captured = target;
+            var enabled = target.IsReady && target.Kind != OutfitterTargetKind.Retainer && !state.IsBusy;
+            reviewRegistry.Register(
+                $"squire.outfitter.target.{target.Key.Replace(':', '.')}",
+                $"Evaluate {target.Name}: {target.Subtitle}",
+                AgentBridgeUiControlKind.Select,
+                minimum,
+                maximum,
+                enabled,
+                selectedTarget?.Key == target.Key,
+                target.Key,
+                () => SelectTarget(captured));
+        }
+        if (!string.IsNullOrWhiteSpace(targetStatus))
+            ImGui.TextColored(MarketMafiosoUiTheme.Warning, targetStatus);
+    }
+
+    private void EnsureTargets()
+    {
+        if (targets is not null)
+            return;
+        try
+        {
+            targets = captureTargets();
+            targetStatus = null;
+        }
+        catch (Exception exception)
+        {
+            targets = [];
+            targetStatus = $"Target discovery stopped safely: {exception.Message}";
+        }
+    }
+
+    private void SelectTarget(OutfitterTarget? target)
+    {
+        if (session.State.IsBusy || target is { IsReady: false } || target?.Kind == OutfitterTargetKind.Retainer)
+            return;
+        if (string.Equals(selectedTarget?.Key, target?.Key, StringComparison.Ordinal))
+            return;
+        selectedTarget = target;
+        session.InvalidateForPlayerStateChange();
+        var subject = SubjectForSelectedTarget(captureCharacter());
+        var family = subject.ClassJobId is { } classJobId ? AdvisorStatFamilies.Resolve(classJobId) : null;
+        if (family is not null)
+            context = family.ProfileDescriptor.DefaultContext;
+        lastAdvice = null;
+        selectedSolutionId = null;
+        handoffStatus = null;
+    }
+
+    private AdvisorCharacterSubject SubjectForSelectedTarget(AdvisorCharacterSubject active)
+    {
+        if (selectedTarget?.Job is not { } job)
+            return active;
+        return new(true, job.ClassJobId, job.Abbreviation, checked((short)job.Level));
+    }
+
 #if DEBUG
     private void DrawSyntheticReviewStatus(MinerBotanistAdvisorSyntheticPresentation presentation)
     {
@@ -441,7 +544,7 @@ internal sealed class MinerBotanistAdvisorPanel
 
     private void Begin()
     {
-        var subject = captureCharacter();
+        var subject = SubjectForSelectedTarget(captureCharacter());
         var family = subject.IsAvailable && subject.ClassJobId is { } classJobId
             ? AdvisorStatFamilies.Resolve(classJobId)
             : null;
@@ -453,14 +556,18 @@ internal sealed class MinerBotanistAdvisorPanel
 #endif
         handoffStatus = null;
         var region = resolveRegion();
-        session.Begin(family.ResolveContext(context.Id), string.IsNullOrWhiteSpace(region) ? "North America" : region);
+        var selectedContext = family.ResolveContext(context.Id);
+        if (selectedTarget is null)
+            session.Begin(selectedContext, string.IsNullOrWhiteSpace(region) ? "North America" : region);
+        else
+            session.Begin(selectedTarget, selectedContext, string.IsNullOrWhiteSpace(region) ? "North America" : region);
     }
 
     private void SetContext(AdvisorUtilityContextDescriptor value)
     {
         if (session.State.IsBusy)
             return;
-        var subject = captureCharacter();
+        var subject = SubjectForSelectedTarget(captureCharacter());
 #if DEBUG
         if (syntheticReviewAdvice is not null)
             subject = new(true, MinerBotanistUtilityProfile.MinerClassJobId, "MIN", 100);

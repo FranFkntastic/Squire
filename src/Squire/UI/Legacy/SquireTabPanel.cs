@@ -91,6 +91,7 @@ internal sealed class SquireTabPanel : IDisposable
         IDataManager dataManager,
         IMarketAcquisitionListingSource marketListingSource,
         IPlayerAdvisorBaselineSource playerAdvisorBaselineSource,
+        IOutfitterRetainerMetadataSource retainerMetadataSource,
         Func<AdvisorCharacterSubject> captureAdvisorCharacter,
         Func<string> resolveAcquisitionRegion,
         Func<bool> getAgentBridgeAudit,
@@ -133,6 +134,10 @@ internal sealed class SquireTabPanel : IDisposable
             advisorSession,
             reviewRegistry,
             marketListingSource,
+            () => new OutfitterTargetCatalog().Build(
+                snapshotSource.Capture(),
+                new Dictionary<ulong, CachedRetainer>(),
+                retainerMetadataSource.ReadAll()),
             captureAdvisorCharacter,
             resolveAcquisitionRegion,
             transfer => stageOutfitterTransfer?.Invoke(transfer));

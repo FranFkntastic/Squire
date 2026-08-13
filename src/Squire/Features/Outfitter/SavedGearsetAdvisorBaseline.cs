@@ -38,9 +38,6 @@ internal static class SavedGearsetAdvisorBaselineAssembler
             return Failure(PlayerAdvisorBaselineStatus.Incomplete, snapshot, target, "Saved-gearset target identity is incomplete.");
         if (family is null || !family.SupportedClassJobIds.Contains(job.ClassJobId))
             return Failure(PlayerAdvisorBaselineStatus.Unsupported, snapshot, target, AdvisorStatFamilies.UnsupportedDiagnostic(job.ClassJobId));
-        if (family is PhysicalRangedAdvisorStatFamily)
-            return Failure(PlayerAdvisorBaselineStatus.Unsupported, snapshot, target,
-                "Inactive combat baselines remain unsupported until level/job base-stat derivation is proven.");
         if (resolution.Status != SavedGearsetTargetResolutionStatus.Complete ||
             resolution.Slots.Count != PlayerAdvisorEquippedSlotMap.All.Count)
             return Failure(PlayerAdvisorBaselineStatus.Incomplete, snapshot, target, resolution.Diagnostic);
@@ -140,6 +137,15 @@ internal static class SavedGearsetAdvisorBaselineAssembler
             [EquipmentStatSemantic.Control] = 0,
             [EquipmentStatSemantic.CraftingPoints] = BaseCraftingPoints,
         },
+        _ when family.RelevantSemantics.All(semantic => semantic is
+            EquipmentStatSemantic.Strength or EquipmentStatSemantic.Dexterity or EquipmentStatSemantic.Vitality or
+            EquipmentStatSemantic.Intelligence or EquipmentStatSemantic.Mind or EquipmentStatSemantic.CriticalHit or
+            EquipmentStatSemantic.Determination or EquipmentStatSemantic.DirectHit or EquipmentStatSemantic.SkillSpeed or
+            EquipmentStatSemantic.SpellSpeed or EquipmentStatSemantic.Tenacity or EquipmentStatSemantic.Piety or
+            EquipmentStatSemantic.PhysicalDamage or EquipmentStatSemantic.MagicalDamage or
+            EquipmentStatSemantic.PhysicalDefense or EquipmentStatSemantic.MagicalDefense or
+            EquipmentStatSemantic.BlockStrength or EquipmentStatSemantic.BlockRate) =>
+            family.RelevantSemantics.ToDictionary(semantic => semantic, _ => 0),
         _ => null,
     };
 

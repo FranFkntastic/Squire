@@ -91,7 +91,7 @@ public sealed unsafe class DalamudPlayerAdvisorBaselineSource : IOutfitterTarget
             var baseParamSheet = dataManager.GetExcelSheet<BaseParam>();
             if (baseParamSheet is null || !TryResolveBaseParamIds(
                     baseParamSheet.Select(value => (value.RowId, (string?)value.Name.ToString())),
-                    family.RelevantSemantics,
+                    family.RelevantSemantics.Where(semantic => !family.IsDefinitionOwnedSemantic(semantic)),
                     out var baseParamIds,
                     out diagnostic))
                 return PlayerAdvisorBaselineAssembler.Failure(
@@ -190,8 +190,7 @@ public sealed unsafe class DalamudPlayerAdvisorBaselineSource : IOutfitterTarget
                         contributions.Add(semantic, scalar);
                         continue;
                     }
-                    if (semantic is EquipmentStatSemantic.PhysicalDamage or
-                        EquipmentStatSemantic.PhysicalDefense or EquipmentStatSemantic.MagicalDefense)
+                    if (family.IsDefinitionOwnedSemantic(semantic))
                     {
                         return PlayerAdvisorBaselineAssembler.Failure(
                             PlayerAdvisorBaselineStatus.Incomplete,
@@ -341,8 +340,7 @@ public sealed unsafe class DalamudPlayerAdvisorBaselineSource : IOutfitterTarget
             var resolution = SavedGearsetTargetResolver.Resolve(snapshot, target);
             var classJobId = resolution.Fingerprint?.ClassJobId ?? target.Job?.ClassJobId;
             var family = classJobId is null ? null : AdvisorStatFamilies.Resolve(classJobId.Value);
-            if (resolution.Status != SavedGearsetTargetResolutionStatus.Complete || family is null ||
-                family is PhysicalRangedAdvisorStatFamily or TankAdvisorStatFamily)
+            if (resolution.Status != SavedGearsetTargetResolutionStatus.Complete || family is null)
             {
                 return SavedGearsetAdvisorBaselineAssembler.Assemble(snapshot, target, resolution, family, []);
             }
@@ -351,7 +349,7 @@ public sealed unsafe class DalamudPlayerAdvisorBaselineSource : IOutfitterTarget
             var diagnostic = string.Empty;
             if (baseParamSheet is null || !TryResolveBaseParamIds(
                     baseParamSheet.Select(value => (value.RowId, (string?)value.Name.ToString())),
-                    family.RelevantSemantics,
+                    family.RelevantSemantics.Where(semantic => !family.IsDefinitionOwnedSemantic(semantic)),
                     out var baseParamIds,
                     out diagnostic))
             {
@@ -379,6 +377,11 @@ public sealed unsafe class DalamudPlayerAdvisorBaselineSource : IOutfitterTarget
                 var contributions = new Dictionary<EquipmentStatSemantic, int>();
                 foreach (var semantic in family.RelevantSemantics)
                 {
+                    if (profile is not null && family.TryGetNonParameterDefinitionValue(profile, semantic, out var scalar))
+                    {
+                        contributions.Add(semantic, scalar);
+                        continue;
+                    }
                     var value = InventoryItem.GetParameterValue(
                         baseParamIds[semantic],
                         item,

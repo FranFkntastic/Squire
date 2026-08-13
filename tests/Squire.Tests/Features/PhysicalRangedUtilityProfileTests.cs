@@ -8,13 +8,13 @@ public sealed class PhysicalRangedUtilityProfileTests
     private static readonly PhysicalRangedUtilityStats Baseline = new(4_800, 5_200, 140, 2_500, 2_500, 3_000, 2_200, 1_800, 1_000);
 
     [Fact]
-    public void Role_registry_contains_only_bard_machinist_and_dancer()
+    public void Role_registry_contains_archer_bard_machinist_and_dancer()
     {
         var role = AdvisorCombatRoles.PhysicalRanged;
 
         Assert.Equal("physical-ranged", role.Id);
         Assert.Equal(
-            [PhysicalRangedUtilityProfile.BardClassJobId, PhysicalRangedUtilityProfile.MachinistClassJobId, PhysicalRangedUtilityProfile.DancerClassJobId],
+            [PhysicalRangedUtilityProfile.ArcherClassJobId, PhysicalRangedUtilityProfile.BardClassJobId, PhysicalRangedUtilityProfile.MachinistClassJobId, PhysicalRangedUtilityProfile.DancerClassJobId],
             role.ClassJobIds.Order().ToArray());
         Assert.Same(role, AdvisorCombatRoles.Resolve(PhysicalRangedUtilityProfile.MachinistClassJobId));
         Assert.Null(AdvisorCombatRoles.Resolve(19));
@@ -37,7 +37,7 @@ public sealed class PhysicalRangedUtilityProfileTests
     }
 
     [Fact]
-    public void Paid_secondary_only_gain_abstains_and_public_authority_remains_experimental()
+    public void Paid_secondary_only_gain_abstains_without_weapon_damage()
     {
         var profile = Profile();
         var candidate = profile.Evaluate(Baseline with { DirectHit = Baseline.DirectHit + 50 });
@@ -45,12 +45,12 @@ public sealed class PhysicalRangedUtilityProfileTests
         var production = profile.AssessAuthority(candidate, 10_000);
 
         Assert.False(production.AdvisorMayConsider);
-        Assert.Contains(production.Reasons, reason => reason.Contains("experimental", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(production.Reasons, reason => reason.Contains("requires a physical weapon-damage gain", StringComparison.Ordinal));
-        Assert.Equal(AdvisorProfileCalibrationState.Experimental, PhysicalRangedUtilityProfile.CalibrationState);
+        Assert.Equal(AdvisorProfileCalibrationState.Supported, PhysicalRangedUtilityProfile.CalibrationState);
     }
 
     [Theory]
+    [InlineData(PhysicalRangedUtilityProfile.ArcherClassJobId)]
     [InlineData(PhysicalRangedUtilityProfile.BardClassJobId)]
     [InlineData(PhysicalRangedUtilityProfile.MachinistClassJobId)]
     [InlineData(PhysicalRangedUtilityProfile.DancerClassJobId)]
@@ -70,7 +70,7 @@ public sealed class PhysicalRangedUtilityProfileTests
     [InlineData(PhysicalRangedUtilityProfile.BardClassJobId)]
     [InlineData(PhysicalRangedUtilityProfile.MachinistClassJobId)]
     [InlineData(PhysicalRangedUtilityProfile.DancerClassJobId)]
-    public void No_loss_weapon_damage_gain_reaches_only_the_calibration_gate(uint classJobId)
+    public void No_loss_weapon_damage_gain_is_authoritative(uint classJobId)
     {
         var profile = Profile(classJobId);
 
@@ -79,9 +79,8 @@ public sealed class PhysicalRangedUtilityProfileTests
 
         Assert.Equal(UpgradeAssessment.ClearImprovement, candidate.Assessment);
         Assert.Equal(["no-loss-physical-damage-gain"], authority.GainedCapabilityIds);
-        Assert.False(authority.AdvisorMayConsider);
-        Assert.Single(authority.Reasons);
-        Assert.Contains("experimental", authority.Reasons[0], StringComparison.OrdinalIgnoreCase);
+        Assert.True(authority.AdvisorMayConsider);
+        Assert.Empty(authority.Reasons);
     }
 
     [Theory]

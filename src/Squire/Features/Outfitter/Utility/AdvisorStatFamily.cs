@@ -28,6 +28,7 @@ public static class AdvisorCombatRoles
         "Physical ranged DPS",
         new HashSet<uint>
         {
+            PhysicalRangedUtilityProfile.ArcherClassJobId,
             PhysicalRangedUtilityProfile.BardClassJobId,
             PhysicalRangedUtilityProfile.MachinistClassJobId,
             PhysicalRangedUtilityProfile.DancerClassJobId,
@@ -76,6 +77,7 @@ public interface IAdvisorStatFamily
 {
     AdvisorUtilityProfileDescriptor ProfileDescriptor { get; }
     IReadOnlySet<uint> SupportedClassJobIds { get; }
+    string FamilyLabel { get; }
     string CoverageJobLabel { get; }
     IReadOnlyList<EquipmentStatSemantic> RelevantSemantics { get; }
     bool IsRelevantSemantic(EquipmentStatSemantic semantic);
@@ -115,7 +117,17 @@ public static class AdvisorStatFamilies
     public const uint FisherClassJobId = 18;
 
     public static IReadOnlyList<IAdvisorStatFamily> All { get; } =
-        [GathererAdvisorStatFamily.Instance, CrafterAdvisorStatFamily.Instance, TankAdvisorStatFamily.Instance, PhysicalRangedAdvisorStatFamily.Instance];
+    [
+        GathererAdvisorStatFamily.Instance,
+        CrafterAdvisorStatFamily.Instance,
+        ConservativeCombatAdvisorStatFamilies.ShieldTank,
+        TankAdvisorStatFamily.Instance,
+        PhysicalRangedAdvisorStatFamily.Instance,
+        ConservativeCombatAdvisorStatFamilies.StrengthMelee,
+        ConservativeCombatAdvisorStatFamilies.ScoutingMelee,
+        ConservativeCombatAdvisorStatFamilies.Healer,
+        ConservativeCombatAdvisorStatFamilies.MagicalRanged,
+    ];
 
     public static IAdvisorStatFamily? Resolve(uint classJobId) =>
         All.FirstOrDefault(family => family.SupportedClassJobIds.Contains(classJobId));
@@ -157,6 +169,7 @@ public sealed class TankAdvisorStatFamily : IAdvisorStatFamily
 
     public AdvisorUtilityProfileDescriptor ProfileDescriptor => Descriptor;
     public IReadOnlySet<uint> SupportedClassJobIds => AdvisorCombatRoles.TwoHandedTank.ClassJobIds;
+    public string FamilyLabel => "Tank";
     public string CoverageJobLabel => "MRD/WAR/DRK/GNB";
     public IReadOnlyList<EquipmentStatSemantic> RelevantSemantics => Semantics;
     public AdvisorUtilityContextDescriptor ResolveContext(string? value) => Descriptor.ResolveContext(value);
@@ -289,6 +302,7 @@ public sealed class GathererAdvisorStatFamily : IAdvisorStatFamily
 
     public AdvisorUtilityProfileDescriptor ProfileDescriptor => Descriptor;
     public IReadOnlySet<uint> SupportedClassJobIds => Jobs;
+    public string FamilyLabel => "Gathering";
     public string CoverageJobLabel => "MIN/BTN";
     public IReadOnlyList<EquipmentStatSemantic> RelevantSemantics => Semantics;
     public AdvisorUtilityContextDescriptor ResolveContext(string? value) => Descriptor.ResolveContext(value);
@@ -388,6 +402,7 @@ public sealed class CrafterAdvisorStatFamily : IAdvisorStatFamily
 
     public AdvisorUtilityProfileDescriptor ProfileDescriptor => Descriptor;
     public IReadOnlySet<uint> SupportedClassJobIds => CrafterUtilityProfile.CrafterClassJobIds;
+    public string FamilyLabel => "Crafting";
     public string CoverageJobLabel => "crafter";
     public IReadOnlyList<EquipmentStatSemantic> RelevantSemantics => Semantics;
     public AdvisorUtilityContextDescriptor ResolveContext(string? value) => Descriptor.ResolveContext(value);
@@ -474,6 +489,7 @@ public sealed class PhysicalRangedAdvisorStatFamily : IAdvisorStatFamily
 
     public AdvisorUtilityProfileDescriptor ProfileDescriptor => Descriptor;
     public IReadOnlySet<uint> SupportedClassJobIds => AdvisorCombatRoles.PhysicalRanged.ClassJobIds;
+    public string FamilyLabel => "Physical ranged DPS";
     public string CoverageJobLabel => "BRD/MCH/DNC";
     public IReadOnlyList<EquipmentStatSemantic> RelevantSemantics => Semantics;
     public AdvisorUtilityContextDescriptor ResolveContext(string? value) => Descriptor.ResolveContext(value);

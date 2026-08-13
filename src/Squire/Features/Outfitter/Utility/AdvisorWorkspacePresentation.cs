@@ -122,15 +122,8 @@ public static class AdvisorWorkspacePresentationResolver
         return family.ResolveContext(state.Context.Id);
     }
 
-    private static string FamilyLabel(IAdvisorStatFamily? family, bool isFisher) => family switch
-    {
-        GathererAdvisorStatFamily => "Gathering",
-        CrafterAdvisorStatFamily => "Crafting",
-        TankAdvisorStatFamily => "Tank",
-        PhysicalRangedAdvisorStatFamily => "Physical ranged DPS",
-        _ when isFisher => "Fisher",
-        _ => "Unsupported job",
-    };
+    private static string FamilyLabel(IAdvisorStatFamily? family, bool isFisher) =>
+        family?.FamilyLabel ?? (isFisher ? "Fisher" : "Unsupported job");
 
     private static (string? Title, string? Message) Recovery(bool available, bool isFisher, string jobLabel)
     {
@@ -157,6 +150,10 @@ public static class AdvisorWorkspacePresentationResolver
         "Crafting" => $"Compare equipped {jobLabel} gear with owned, vendor, crafted, and market options using the crafting stat model.",
         "Tank" => $"Compare equipped {jobLabel} gear with owned, vendor, and market options using the conservative tank model.",
         "Physical ranged DPS" => $"Compare equipped {jobLabel} gear with owned, vendor, crafted, and market options using the physical-ranged role model.",
+        "Strength melee DPS" => $"Compare equipped {jobLabel} gear with owned, vendor, crafted, and market options using the conservative melee model.",
+        "Scouting melee DPS" => $"Compare equipped {jobLabel} gear with owned, vendor, crafted, and market options using the conservative scouting model.",
+        "Healer" => $"Compare equipped {jobLabel} gear with owned, vendor, crafted, and market options using the conservative healer model.",
+        "Magical ranged DPS" => $"Compare equipped {jobLabel} gear with owned, vendor, crafted, and market options using the conservative magical-ranged model.",
         _ => "Squire will evaluate the active job only when an authoritative model is available.",
     };
 

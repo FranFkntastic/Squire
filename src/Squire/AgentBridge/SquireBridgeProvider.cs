@@ -31,6 +31,9 @@ public sealed record SquireBridgeProductTruth(
     string? OperationalStatusMessage,
     DateTimeOffset? OperationalStatusCreatedAtUtc,
     DateTimeOffset? OperationalStatusExpiresAtUtc,
+    string CandidateFilterExpression,
+    bool CandidateFilterValid,
+    int VisibleCandidateCount,
     SquireBridgeSettingsTruth Settings);
 
 public sealed record SquireBridgeSettingsTruth(

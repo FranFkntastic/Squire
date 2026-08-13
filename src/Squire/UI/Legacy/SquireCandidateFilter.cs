@@ -84,6 +84,8 @@ internal sealed class SquireCandidateFilter
         .Bind(Disposition, candidate => Evidence.Known(candidate.RecommendedDisposition))
         .Bind(Reason, candidate => Evidence.Known(string.Join(' ', candidate.Reasons.Select(reason => reason.Message))))
         .UseDefaultText(Name)
+        .UseDefaultText(Location)
+        .UseDefaultText(Reason)
         .Build("squire-candidates", "1");
 
     public static FilterReferenceModel Reference { get; } = FilterReferenceGenerator.Create(Context);
@@ -95,18 +97,26 @@ internal sealed class SquireCandidateFilter
     public string? Error => current?.Diagnostics
         .FirstOrDefault(diagnostic => diagnostic.Severity == FilterDiagnosticSeverity.Error)?.Message;
 
+    public bool IsValid => current?.IsValid ?? true;
+
+    public string Expression => currentExpression;
+
+    public void SetExpression(string? expression)
+    {
+        var value = expression ?? string.Empty;
+        if (current is not null && string.Equals(value, currentExpression, StringComparison.Ordinal))
+            return;
+
+        currentExpression = value;
+        current = FilterCompiler.Compile(value, Context);
+        if (current.IsValid)
+            lastValid = current;
+    }
+
     public SquireCandidate[] Apply(IEnumerable<SquireCandidate> rows, string? expression)
     {
         ArgumentNullException.ThrowIfNull(rows);
-        var value = expression ?? string.Empty;
-        if (current is null || !string.Equals(value, currentExpression, StringComparison.Ordinal))
-        {
-            currentExpression = value;
-            current = FilterCompiler.Compile(value, Context);
-            if (current.IsValid)
-                lastValid = current;
-        }
-
+        SetExpression(expression);
         return rows.Where(lastValid.Matches).ToArray();
     }
 

@@ -37,6 +37,7 @@ internal sealed class SquireTabPanel : IDisposable
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly ISquireConfigurationStore config;
     private readonly SquireCandidateEvaluator evaluator = new();
+    private readonly SquireCandidateFilter candidateFilter = new();
     private readonly SquireCounterfactualBatchValidator batchValidator = new();
     private readonly SquireReviewState review = new();
     private readonly SquireCleanupRuleStore ruleStore;
@@ -150,6 +151,7 @@ internal sealed class SquireTabPanel : IDisposable
             () => SelectWorkspace(SquireWorkspaces.Cleanup),
             () => routeDiagnosticsPanel.Draw(analysis, focusedItem));
         search = config.Squire.Search;
+        candidateFilter.SetExpression(search);
         showProtected = config.Squire.ShowProtected;
         showNonEquipment = config.Squire.ShowNonEquipment;
     }
@@ -285,7 +287,7 @@ internal sealed class SquireTabPanel : IDisposable
         }
 
         ImGui.SetNextItemWidth(280);
-        if (ImGui.InputTextWithHint("##SquireSearch", "Search item, location, or reason", ref search, 160))
+        if (ImGui.InputTextWithHint("##SquireSearch", "Search or filter, e.g. quality:hq", ref search, 160))
         {
             config.Squire.Search = search;
             config.Save();
@@ -337,6 +339,9 @@ internal sealed class SquireTabPanel : IDisposable
         }
         ImGui.SameLine();
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Right-click a table header to choose columns.");
+        candidateFilter.SetExpression(search);
+        if (candidateFilter.Error is { } filterError)
+            ImGui.TextColored(MarketMafiosoUiTheme.Error, $"Check the filter: {filterError}");
         DrawBatchBar();
         DrawTable(analysis);
         evidencePanel.Draw(analysis, focusedItem);
@@ -487,6 +492,7 @@ internal sealed class SquireTabPanel : IDisposable
     public SquireBridgeProductTruth CreateStandaloneBridgeTruth()
     {
         var currentStatus = operationalStatus.Current(DateTimeOffset.UtcNow);
+        var visibleCandidateCount = analysis is null ? 0 : ResolveVisibleCandidates(analysis).Length;
         return new(
             ResolveCleanupSurfaceState(analysis).ToString(),
             analysis?.Snapshot.Identity.CapturedAt,
@@ -503,6 +509,9 @@ internal sealed class SquireTabPanel : IDisposable
             currentStatus?.Message,
             currentStatus?.CreatedAtUtc,
             currentStatus?.ExpiresAtUtc,
+            candidateFilter.Expression,
+            candidateFilter.IsValid,
+            visibleCandidateCount,
             settingsPanel.CreateBridgeTruth());
     }
 
@@ -642,17 +651,6 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void DrawTable(SquireAnalysis value)
     {
-        var baseRows = showBatchOnly
-            ? value.Candidates.Where(candidate => review.Selections.ContainsKey(candidate.Instance.Fingerprint)).ToArray()
-            : value.Candidates
-                .Where(candidate => showNonEquipment || candidate.Definition.IsEquipment)
-                .Where(candidate => showProtected || candidate.Assessment is not (SquireAssessment.Protected or SquireAssessment.EvaluationFailure))
-                .Where(candidate => string.IsNullOrWhiteSpace(search)
-                    || candidate.Definition.Name.Contains(search, StringComparison.OrdinalIgnoreCase)
-                    || candidate.Instance.Fingerprint.Container.Contains(search, StringComparison.OrdinalIgnoreCase)
-                    || FormatLocation(candidate.Instance.Fingerprint).Contains(search, StringComparison.OrdinalIgnoreCase)
-                    || candidate.Reasons.Any(reason => reason.Message.Contains(search, StringComparison.OrdinalIgnoreCase)))
-                .ToArray();
         var tableFlags = ImGuiTableFlags.RowBg | ImGuiTableFlags.Borders | ImGuiTableFlags.ScrollY |
                          ImGuiTableFlags.ScrollX | ImGuiTableFlags.Resizable | ImGuiTableFlags.Reorderable |
                          ImGuiTableFlags.Hideable | ImGuiTableFlags.Sortable;
@@ -681,9 +679,7 @@ internal sealed class SquireTabPanel : IDisposable
         DrawColumnFilters();
         if (showBatchOnly)
             ImGui.EndDisabled();
-        var filteredRows = showBatchOnly
-            ? baseRows
-            : SquireCandidateTableProjection.Filter(baseRows, columnFilters, FormatRowState);
+        var filteredRows = ResolveVisibleCandidates(value);
         var visibleFingerprints = filteredRows.Select(candidate => candidate.Instance.Fingerprint)
             .ToHashSet(EquipmentInstanceFingerprintComparer.Instance);
         hiddenBatchCount = review.Selections.Keys.Count(fingerprint => !visibleFingerprints.Contains(fingerprint));
@@ -799,6 +795,20 @@ internal sealed class SquireTabPanel : IDisposable
         if (tableSelection.IsDragging && ImGui.IsMouseReleased(ImGuiMouseButton.Left))
             tableSelection.EndDrag();
         ImGui.EndTable();
+    }
+
+    private SquireCandidate[] ResolveVisibleCandidates(SquireAnalysis value)
+    {
+        var baseRows = showBatchOnly
+            ? value.Candidates.Where(candidate => review.Selections.ContainsKey(candidate.Instance.Fingerprint)).ToArray()
+            : candidateFilter.Apply(
+                value.Candidates
+                    .Where(candidate => showNonEquipment || candidate.Definition.IsEquipment)
+                    .Where(candidate => showProtected || candidate.Assessment is not (SquireAssessment.Protected or SquireAssessment.EvaluationFailure)),
+                search);
+        return showBatchOnly
+            ? baseRows
+            : SquireCandidateTableProjection.Filter(baseRows, columnFilters, FormatRowState);
     }
 
     private void DrawBatchBar()

@@ -3,13 +3,14 @@ using Franthropy.Dalamud.Equipment;
 using Franthropy.Filtering.Completion;
 using MarketMafioso.Squire;
 using MarketMafioso.Windows.Squire;
+using Newtonsoft.Json;
 
 namespace MarketMafioso.Tests.Squire;
 
 public sealed class SquireCandidateFilterTests
 {
     [Fact]
-    public void BareTextAndNegationSearchItemNamesAcrossMultipleMatches()
+    public void BareTextAndNegationSearchItemLocationAndReasonAcrossMultipleMatches()
     {
         var filter = new SquireCandidateFilter();
         var rows = new[]
@@ -21,6 +22,8 @@ public sealed class SquireCandidateFilterTests
 
         Assert.Equal(2, filter.Apply(rows, "darksteel").Length);
         Assert.Single(filter.Apply(rows, "not darksteel"));
+        Assert.Equal(2, filter.Apply(rows, "armoury").Length);
+        Assert.Equal(3, filter.Apply(rows, "trusted baseline").Length);
     }
 
     [Theory]
@@ -55,7 +58,13 @@ public sealed class SquireCandidateFilterTests
 
         Assert.Single(filter.Apply(rows, "quality:hq"));
         Assert.Single(filter.Apply(rows, "quality:"));
+        Assert.Equal("quality:", filter.Expression);
+        Assert.False(filter.IsValid);
         Assert.NotNull(filter.Error);
+
+        Assert.Single(filter.Apply(rows, "quality:nq"));
+        Assert.True(filter.IsValid);
+        Assert.Null(filter.Error);
     }
 
     [Fact]
@@ -66,6 +75,20 @@ public sealed class SquireCandidateFilterTests
             new FilterCompletionRequest("squire-candidates", "is:h", 4));
 
         Assert.Contains(completion.Items, item => item.InsertionText.Equals("hq", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void StructuredExpressionRoundTripsThroughCanonicalConfiguration()
+    {
+        var configuration = new SquireConfiguration { Search = "quality:hq itemlevel>=80" };
+
+        var restored = JsonConvert.DeserializeObject<SquireConfiguration>(JsonConvert.SerializeObject(configuration));
+
+        Assert.NotNull(restored);
+        Assert.Equal(configuration.Search, restored.Search);
+        var filter = new SquireCandidateFilter();
+        Assert.Single(filter.Apply([CreateCandidate("Darksteel Barbut", "ArmoryHead", true, true, 90)], restored.Search));
+        Assert.True(filter.IsValid);
     }
 
     private static SquireCandidate CreateCandidate(

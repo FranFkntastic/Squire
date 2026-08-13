@@ -24,6 +24,7 @@ public sealed class AgentBridgeProviderTests
                 null,
                 new SquireBridgeProductTruth(
                     "WaitingForAnalysis", null, false, 0, 0, 0, 0, false, false, "Idle", null, null, null, null, null,
+                    "quality:hq", true, 2,
                     new SquireBridgeSettingsTruth("safety", true, true, false, true, 30, false, false, true, true, 90, false, true, true, true, true, false, false, false))),
             () => opened = true,
             () => { },
@@ -40,5 +41,8 @@ public sealed class AgentBridgeProviderTests
         Assert.Equal("WaitingForAnalysis", truth.Product.CleanupSurfaceState);
         Assert.Equal("Idle", truth.Product.AdvisorStage);
         Assert.Null(truth.Product.OperationalStatusKind);
+        Assert.Equal("quality:hq", truth.Product.CandidateFilterExpression);
+        Assert.True(truth.Product.CandidateFilterValid);
+        Assert.Equal(2, truth.Product.VisibleCandidateCount);
     }
 }

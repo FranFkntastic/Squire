@@ -2,16 +2,29 @@ using Dalamud.Configuration;
 using Franthropy.Dalamud.Equipment;
 using MarketMafioso.Squire;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace Squire;
 
 [Serializable]
 public sealed class PluginConfiguration : IPluginConfiguration, ISquireConfigurationStore
 {
-    public int Version { get; set; } = 1;
+    private MarketMafioso.Squire.SquireConfiguration featureSettings = new();
+
+    public int Version { get; set; } = 2;
     public string PluginInstanceId { get; set; } = Guid.NewGuid().ToString("N");
-    public SquireSettings Settings { get; set; } = new();
-    public MarketMafioso.Squire.SquireConfiguration FeatureSettings { get; set; } = new();
+    [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+    public MarketMafioso.Squire.SquireConfiguration FeatureSettings
+    {
+        get => featureSettings;
+        set
+        {
+            featureSettings = value ?? new();
+            FeatureSettingsWasDeserialized = true;
+        }
+    }
+    public string? LegacySettingsArchiveJson { get; set; }
+    public LegacySettingsCompatibilityReceipt? LegacySettingsCompatibility { get; set; }
     public string? OutfitterRouteExecutionStateJson { get; set; }
     public bool EnableMarketAcquisitionDryRunTools { get; set; }
     public MarketMafioso.PersistedMarketAcquisitionRequestDocument? ActiveMarketAcquisitionRequestDocument { get; set; }
@@ -23,6 +36,20 @@ public sealed class PluginConfiguration : IPluginConfiguration, ISquireConfigura
 
     [JsonIgnore]
     internal Action SaveAction { get; set; } = () => { };
+
+    [JsonIgnore]
+    internal JToken? PendingLegacySettingsInput { get; private set; }
+
+    [JsonIgnore]
+    internal bool FeatureSettingsWasDeserialized { get; private set; }
+
+    [JsonProperty("Settings")]
+    private JToken? LegacySettingsCompatibilityInput
+    {
+        set => PendingLegacySettingsInput = value?.DeepClone();
+    }
+
+    internal void ClearPendingLegacySettingsInput() => PendingLegacySettingsInput = null;
 
     MarketMafioso.Squire.SquireConfiguration ISquireConfigurationStore.Squire
     {
@@ -185,3 +212,12 @@ public sealed record LegacyMmfMigrationReceipt(
     DateTimeOffset ImportedAtUtc,
     int CleanupRuleCount,
     int CharacterRuleCount);
+
+public sealed record LegacySettingsCompatibilityReceipt(
+    int SchemaVersion,
+    string Resolution,
+    string LegacySemanticSha256,
+    string CanonicalSemanticSha256,
+    IReadOnlyList<string> DifferingFields,
+    IReadOnlyList<string> UnresolvedFields,
+    DateTimeOffset CapturedAtUtc);

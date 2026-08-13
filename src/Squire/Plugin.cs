@@ -59,12 +59,18 @@ public sealed class Plugin : IDalamudPlugin
         this.pluginInterface = pluginInterface;
         this.commands = commands;
         this.framework = framework;
-        configuration = pluginInterface.GetPluginConfig() as PluginConfiguration ?? new PluginConfiguration();
+        var loadedConfiguration = pluginInterface.GetPluginConfig() as PluginConfiguration;
+        configuration = loadedConfiguration ?? new PluginConfiguration();
         configuration.SaveAction = SaveConfiguration;
+        var configurationChanged = loadedConfiguration is null;
         if (string.IsNullOrWhiteSpace(configuration.PluginInstanceId))
+        {
             configuration.PluginInstanceId = Guid.NewGuid().ToString("N");
-        configuration.FeatureSettings ??= new SquireConfiguration();
-        SaveConfiguration();
+            configurationChanged = true;
+        }
+        var archivalResult = LegacySettingsArchivalConsolidator.Consolidate(configuration, DateTimeOffset.UtcNow);
+        if (configurationChanged || archivalResult.Changed)
+            SaveConfiguration();
 
         var configDirectory = pluginInterface.GetPluginConfigDirectory();
         try

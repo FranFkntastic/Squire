@@ -59,6 +59,7 @@ internal static class MinerBotanistAdvisorSessionEvidencePolicy
 /// </summary>
 public sealed class MinerBotanistAdvisorSession : IDisposable
 {
+    private const int AdvisorMarketListingLimit = 20;
     private readonly IPlayerAdvisorBaselineSource baselineSource;
     private readonly MinerBotanistAdvisorCatalog catalog;
     private readonly OutfitterMarketEvidenceDiscoveryService marketDiscovery;
@@ -516,7 +517,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             "universalis",
             Region,
             offers.MarketItemIds,
-            ListingLimit: 100,
+            ListingLimit: AdvisorMarketListingLimit,
             CoverageMode: OutfitterMarketCoverageMode.ExhaustiveWithinScope,
             MaxConcurrency: 4);
         discoveryTask = marketDiscovery.DiscoverAsync(discoveryRequest, cancellation!.Token);
@@ -704,7 +705,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             "universalis",
             Region,
             itemIds,
-            ListingLimit: 100,
+            ListingLimit: AdvisorMarketListingLimit,
             CoverageMode: OutfitterMarketCoverageMode.ExhaustiveWithinScope,
             MaxConcurrency: 4);
         discoveryTask = marketDiscovery.DiscoverAsync(discoveryRequest, cancellation!.Token);

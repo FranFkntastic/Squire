@@ -26,7 +26,14 @@ public sealed class UniversalisMarketAcquisitionPlanSource : IMarketAcquisitionB
     {
         this.httpClient = httpClient;
         this.baseUri = baseUri;
-        bulkClient = new(httpClient, baseUri);
+        bulkClient = new(httpClient, baseUri, new()
+        {
+            ChunkSize = 25,
+            MaxConcurrentRequests = UniversalisBulkClient.DefaultMaxConcurrentRequests,
+            MaxAttemptsPerChunk = 1,
+            MaximumSplitDepth = 1,
+            AttemptTimeout = TimeSpan.FromSeconds(15),
+        });
     }
 
     public async Task<MarketAcquisitionBulkListingResult> FetchListingsBulkAsync(

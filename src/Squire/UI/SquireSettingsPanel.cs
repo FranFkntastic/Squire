@@ -147,7 +147,7 @@ internal sealed class SquireSettingsPanel
         if (BeginRows("Developer"))
         {
             DrawToggle(SquireSettingsControlIds.RouteDiagnostics, "Route diagnostics", "Inspect safe probes and recent route evidence.", state.RouteDiagnosticsVisible, state.SetRouteDiagnosticsVisible);
-            DrawToggle(SquireSettingsControlIds.AdvisorFixtures, "Deterministic advisor fixtures", "Expose reviewed success, stale, incomplete, and abstention states.", state.AdvisorFixturesEnabled, state.SetAdvisorFixturesEnabled);
+            DrawToggle(SquireSettingsControlIds.AdvisorFixtures, "Deterministic review fixtures", "Expose frozen Cleanup and Gear upgrades states without gameplay authority.", state.AdvisorFixturesEnabled, state.SetAdvisorFixturesEnabled);
             DrawToggle(SquireSettingsControlIds.AgentBridgeAudit, "Agent Bridge audit log", "Record authenticated development-control receipts.", state.AgentBridgeAuditEnabled, state.SetAgentBridgeAuditEnabled);
             ImGui.EndTable();
         }

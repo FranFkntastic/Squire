@@ -37,9 +37,8 @@ internal sealed class SquireTabPanel : IDisposable
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly ISquireConfigurationStore config;
     private readonly SquireCandidateEvaluator evaluator = new();
-    private readonly SquireCandidateFilter candidateFilter = new();
+    private readonly SquireCleanupWorkbenchState cleanupWorkbench;
     private readonly SquireCounterfactualBatchValidator batchValidator = new();
-    private readonly SquireReviewState review = new();
     private readonly SquireCleanupRuleStore ruleStore;
     private readonly SquireEvidencePanel evidencePanel;
     private readonly SquireRouteDiagnosticsPanel routeDiagnosticsPanel;
@@ -56,15 +55,6 @@ internal sealed class SquireTabPanel : IDisposable
     private readonly Func<uint, string> resolveItemName;
     private SquireAnalysis? analysis;
     private SquireRunPresentation? lastRun;
-    private string search = string.Empty;
-    private bool showProtected;
-    private bool showNonEquipment;
-    private bool selectionMode;
-    private readonly TableSelectionModel<EquipmentInstanceFingerprint> tableSelection = new(EquipmentInstanceFingerprintComparer.Instance);
-    private readonly string[] columnFilters = new string[SquireCandidateTableProjection.ColumnCount];
-    private EquipmentInstanceFingerprint? focusedItem;
-    private bool showBatchOnly;
-    private int hiddenBatchCount;
     private bool showSnapshotDiagnostics;
     private DateTimeOffset nextAutomaticRefreshAt = DateTimeOffset.MinValue;
     private volatile bool automaticRefreshRequested;
@@ -79,6 +69,9 @@ internal sealed class SquireTabPanel : IDisposable
     private Task? activeRunRecovery;
     private string? batchValidationKey;
     private SquireBatchValidationResult? cachedBatchValidation;
+#if DEBUG
+    private SquireCleanupSyntheticReview? cleanupSyntheticReview;
+#endif
 
     public MinerBotanistAdvisorSessionState AdvisorState => advisorSession.State;
 
@@ -143,17 +136,17 @@ internal sealed class SquireTabPanel : IDisposable
             transfer => stageOutfitterTransfer?.Invoke(transfer));
         workspaceState = new SquireWorkspaceState(config);
         ruleStore = new SquireCleanupRuleStore(config);
+        cleanupWorkbench = new(
+            config.Squire.Search,
+            config.Squire.ShowProtected,
+            config.Squire.ShowNonEquipment);
         evidencePanel = new SquireEvidencePanel(ruleStore, reviewRegistry, Refresh);
         routeDiagnosticsPanel = new SquireRouteDiagnosticsPanel(actionAdapter, reviewRegistry, uiStateCapture);
         settingsPanel = new SquireSettingsPanel(
             new SquireSettingsState(config, RequestPolicyRefresh, getAgentBridgeAudit, setAgentBridgeAudit),
             reviewRegistry,
             () => SelectWorkspace(SquireWorkspaces.Cleanup),
-            () => routeDiagnosticsPanel.Draw(analysis, focusedItem));
-        search = config.Squire.Search;
-        candidateFilter.SetExpression(search);
-        showProtected = config.Squire.ShowProtected;
-        showNonEquipment = config.Squire.ShowNonEquipment;
+            () => routeDiagnosticsPanel.Draw(analysis, cleanupWorkbench.FocusedItem));
     }
 
     public void Draw()
@@ -196,6 +189,25 @@ internal sealed class SquireTabPanel : IDisposable
     }
 #endif
 
+    private SquireAnalysis? DisplayedCleanupAnalysis =>
+#if DEBUG
+        cleanupSyntheticReview?.Analysis ??
+#endif
+        analysis;
+
+    private SquireCleanupWorkbenchState ActiveCleanupWorkbench =>
+#if DEBUG
+        cleanupSyntheticReview?.Workbench ??
+#endif
+        cleanupWorkbench;
+
+    private bool IsCleanupSyntheticReviewActive =>
+#if DEBUG
+        cleanupSyntheticReview is not null;
+#else
+        false;
+#endif
+
     private void DrawWorkspaceSelector()
     {
         DrawWorkspaceButton(SquireWorkspaces.Cleanup, "Cleanup", "Review and execute equipment cleanup");
@@ -236,12 +248,23 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void DrawCleanup()
     {
+#if DEBUG
+        if (!config.EnableMarketAcquisitionDryRunTools)
+            cleanupSyntheticReview = null;
+#endif
         DalamudUiChrome.DrawSectionHeading(
             "Equipment cleanup",
             "Safe recommendations from current character evidence",
             SquireUiTheme.Current.Palette,
             () =>
             {
+#if DEBUG
+                if (cleanupSyntheticReview is not null)
+                {
+                    DrawCleanupSyntheticReviewToggle();
+                    return;
+                }
+#endif
                 if (DalamudUiControls.Button(
                         "Check again##Squire",
                         SquireUiTheme.Current,
@@ -252,28 +275,38 @@ internal sealed class SquireTabPanel : IDisposable
             },
             116f);
         ImGui.Spacing();
-        if (DalamudUiControls.Button(
-                "Export evaluation snapshot##Squire",
-                SquireUiTheme.Current,
-                DalamudUiTone.Neutral,
-                quiet: true,
-                enabled: analysis is not null))
-            Export();
-        RegisterLastControl("squire.export", "Export Squire evaluation snapshot", AgentBridgeUiControlKind.Button, analysis is not null, false, null, Export);
-        DrawOperationalStatus();
+#if DEBUG
+        if (cleanupSyntheticReview is not null)
+        {
+            DrawCleanupSyntheticReviewHeader();
+        }
+        else
+#endif
+        {
+            if (DalamudUiControls.Button(
+                    "Export evaluation snapshot##Squire",
+                    SquireUiTheme.Current,
+                    DalamudUiTone.Neutral,
+                    quiet: true,
+                    enabled: analysis is not null))
+                Export();
+            RegisterLastControl("squire.export", "Export Squire evaluation snapshot", AgentBridgeUiControlKind.Button, analysis is not null, false, null, Export);
+            DrawOperationalStatus();
+        }
 
-        if (analysis is null)
+        var displayedAnalysis = DisplayedCleanupAnalysis;
+        if (displayedAnalysis is null)
         {
             DrawWaitingForAnalysis();
             return;
         }
 
-        DrawSnapshotState(analysis);
-        var surfaceState = ResolveCleanupSurfaceState(analysis);
+        DrawSnapshotState(displayedAnalysis);
+        var surfaceState = ResolveCleanupSurfaceState(displayedAnalysis);
         if (surfaceState is SquireCleanupSurfaceState.WaitingForCharacter or SquireCleanupSurfaceState.SnapshotIncomplete)
             return;
 
-        DrawSummary(analysis);
+        DrawSummary(displayedAnalysis);
         ImGui.Separator();
         if (surfaceState == SquireCleanupSurfaceState.ReadyEmpty)
         {
@@ -286,50 +319,70 @@ internal sealed class SquireTabPanel : IDisposable
             return;
         }
 
+        var editedSearch = ActiveCleanupWorkbench.Search;
         ImGui.SetNextItemWidth(280);
-        if (ImGui.InputTextWithHint("##SquireSearch", "Search or filter, e.g. quality:hq", ref search, 160))
+        if (ImGui.InputTextWithHint("##SquireSearch", "Search or filter, e.g. quality:hq", ref editedSearch, 160))
         {
-            config.Squire.Search = search;
-            config.Save();
+            ActiveCleanupWorkbench.Search = editedSearch;
+            if (!IsCleanupSyntheticReviewActive)
+            {
+                config.Squire.Search = editedSearch;
+                config.Save();
+            }
         }
+        var editedShowProtected = ActiveCleanupWorkbench.ShowProtected;
         ImGui.SameLine();
-        if (ImGui.Checkbox("Show protected", ref showProtected))
+        if (ImGui.Checkbox("Show protected", ref editedShowProtected))
         {
-            config.Squire.ShowProtected = showProtected;
-            config.Save();
+            ActiveCleanupWorkbench.ShowProtected = editedShowProtected;
+            if (!IsCleanupSyntheticReviewActive)
+            {
+                config.Squire.ShowProtected = editedShowProtected;
+                config.Save();
+            }
         }
         RegisterLastControl(
             "squire.show-protected",
             "Show protected and evaluation-failure rows",
             AgentBridgeUiControlKind.Toggle,
             true,
-            showProtected,
+            ActiveCleanupWorkbench.ShowProtected,
             null,
             () =>
             {
-                showProtected = !showProtected;
-                config.Squire.ShowProtected = showProtected;
-                config.Save();
+                ActiveCleanupWorkbench.ShowProtected = !ActiveCleanupWorkbench.ShowProtected;
+                if (!IsCleanupSyntheticReviewActive)
+                {
+                    config.Squire.ShowProtected = ActiveCleanupWorkbench.ShowProtected;
+                    config.Save();
+                }
             });
+        var editedShowNonEquipment = ActiveCleanupWorkbench.ShowNonEquipment;
         ImGui.SameLine();
-        if (ImGui.Checkbox("Show non-equipment", ref showNonEquipment))
+        if (ImGui.Checkbox("Show non-equipment", ref editedShowNonEquipment))
         {
-            config.Squire.ShowNonEquipment = showNonEquipment;
-            config.Save();
+            ActiveCleanupWorkbench.ShowNonEquipment = editedShowNonEquipment;
+            if (!IsCleanupSyntheticReviewActive)
+            {
+                config.Squire.ShowNonEquipment = editedShowNonEquipment;
+                config.Save();
+            }
         }
+        var editedSelectionMode = ActiveCleanupWorkbench.SelectionMode;
         ImGui.SameLine();
-        ImGui.Checkbox("Selection mode", ref selectionMode);
+        if (ImGui.Checkbox("Selection mode", ref editedSelectionMode))
+            ActiveCleanupWorkbench.SelectionMode = editedSelectionMode;
         RegisterLastControl(
             "squire.selection-mode",
             "Toggle Squire selection mode",
             AgentBridgeUiControlKind.Toggle,
             true,
-            selectionMode,
+            ActiveCleanupWorkbench.SelectionMode,
             null,
-            () => selectionMode = !selectionMode);
+            () => ActiveCleanupWorkbench.SelectionMode = !ActiveCleanupWorkbench.SelectionMode);
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Select any rows for inspection. Ctrl-click adds, Alt-click removes, and Shift-click selects the anchored range. Only executable candidates enter the action batch.");
-        if (selectionMode && tableSelection.Count > 0)
+        if (ActiveCleanupWorkbench.SelectionMode && ActiveCleanupWorkbench.TableSelection.Count > 0)
         {
             ImGui.SameLine();
             if (ImGui.SmallButton("Clear selection"))
@@ -339,14 +392,28 @@ internal sealed class SquireTabPanel : IDisposable
         }
         ImGui.SameLine();
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Right-click a table header to choose columns.");
-        candidateFilter.SetExpression(search);
-        if (candidateFilter.Error is { } filterError)
+        ActiveCleanupWorkbench.Filter.SetExpression(ActiveCleanupWorkbench.Search);
+        if (ActiveCleanupWorkbench.Filter.Error is { } filterError)
             ImGui.TextColored(MarketMafiosoUiTheme.Error, $"Check the filter: {filterError}");
+        var visibleCandidates = ResolveVisibleCandidates(displayedAnalysis);
+        var visibleFingerprints = visibleCandidates.Select(candidate => candidate.Instance.Fingerprint)
+            .ToHashSet(EquipmentInstanceFingerprintComparer.Instance);
+        ActiveCleanupWorkbench.HiddenBatchCount = ActiveCleanupWorkbench.Review.Selections.Keys.Count(fingerprint => !visibleFingerprints.Contains(fingerprint));
         DrawBatchBar();
-        DrawTable(analysis);
-        evidencePanel.Draw(analysis, focusedItem);
-        DrawRunPanel(analysis);
-        if (lastRun is { } runPresentation)
+        DrawTable(displayedAnalysis, visibleCandidates);
+        if (visibleCandidates.Length == 0)
+        {
+            DalamudUiChrome.DrawCallout(
+                "SquireFilteredEmptyState",
+                "No rows match these filters",
+                "Adjust the search or column filters to show candidates again.",
+                SquireUiTheme.Current,
+                DalamudUiTone.Neutral);
+        }
+        if (!IsCleanupSyntheticReviewActive)
+            evidencePanel.Draw(displayedAnalysis, ActiveCleanupWorkbench.FocusedItem);
+        DrawRunPanel(displayedAnalysis);
+        if (!IsCleanupSyntheticReviewActive && lastRun is { } runPresentation)
             runResultPanel.Draw(
                 runPresentation,
                 resolveItemName,
@@ -435,9 +502,9 @@ internal sealed class SquireTabPanel : IDisposable
                                 snapshot.Identity.Scope?.LocalContentId == previousContentId;
             SquireSelectionReconciliation? reconciliation = null;
             if (reconcileSelections && sameCharacter)
-                reconciliation = review.Reconcile(refreshedAnalysis);
+                reconciliation = cleanupWorkbench.Review.Reconcile(refreshedAnalysis);
             else
-                review.Adopt(refreshedAnalysis);
+                cleanupWorkbench.Review.Adopt(refreshedAnalysis);
 
             analysis = refreshedAnalysis;
             lastAnalysisInputSignature = inputSignature;
@@ -445,17 +512,17 @@ internal sealed class SquireTabPanel : IDisposable
             {
                 var currentFingerprints = analysis.Candidates.Select(candidate => candidate.Instance.Fingerprint)
                     .ToHashSet(EquipmentInstanceFingerprintComparer.Instance);
-                tableSelection.Retain(currentFingerprints);
-                if (focusedItem is { } focused && !currentFingerprints.Contains(focused))
-                    focusedItem = null;
+                cleanupWorkbench.TableSelection.Retain(currentFingerprints);
+                if (cleanupWorkbench.FocusedItem is { } focused && !currentFingerprints.Contains(focused))
+                    cleanupWorkbench.FocusedItem = null;
             }
             else
             {
-                tableSelection.Clear();
-                focusedItem = null;
+                cleanupWorkbench.TableSelection.Clear();
+                cleanupWorkbench.FocusedItem = null;
             }
             InvalidateRunAuthorization();
-            hiddenBatchCount = 0;
+            cleanupWorkbench.HiddenBatchCount = 0;
             automaticRefreshRequested = false;
             automaticRefreshTrigger = "Automatic refresh";
             nextAutomaticRefreshAt = DateTimeOffset.UtcNow.AddSeconds(2);
@@ -470,7 +537,7 @@ internal sealed class SquireTabPanel : IDisposable
         catch (Exception ex)
         {
             if (analysis is null)
-                review.Invalidate();
+                cleanupWorkbench.Review.Invalidate();
             operationalStatus.ReportFailure(
                 SquireOperationalStatusSource.Refresh,
                 $"{trigger} failed: {ex.Message}",
@@ -491,26 +558,29 @@ internal sealed class SquireTabPanel : IDisposable
 
     public SquireBridgeProductTruth CreateStandaloneBridgeTruth()
     {
-        var currentStatus = operationalStatus.Current(DateTimeOffset.UtcNow);
-        var visibleCandidateCount = analysis is null ? 0 : ResolveVisibleCandidates(analysis).Length;
+        var currentStatus = IsCleanupSyntheticReviewActive
+            ? null
+            : operationalStatus.Current(DateTimeOffset.UtcNow);
+        var displayedAnalysis = DisplayedCleanupAnalysis;
+        var visibleCandidateCount = displayedAnalysis is null ? 0 : ResolveVisibleCandidates(displayedAnalysis).Length;
         return new(
-            ResolveCleanupSurfaceState(analysis).ToString(),
-            analysis?.Snapshot.Identity.CapturedAt,
-            analysis?.Snapshot.Diagnostics.IsComplete == true,
-            analysis?.Candidates.Count ?? 0,
-            analysis?.Candidates.Count(candidate => candidate.IsExecutable) ?? 0,
-            review.Selections.Count,
-            hiddenBatchCount,
-            runConfirmed,
-            activeRun is { IsCompleted: false },
+            ResolveCleanupSurfaceState(displayedAnalysis).ToString(),
+            displayedAnalysis?.Snapshot.Identity.CapturedAt,
+            displayedAnalysis?.Snapshot.Diagnostics.IsComplete == true,
+            displayedAnalysis?.Candidates.Count ?? 0,
+            displayedAnalysis?.Candidates.Count(candidate => candidate.IsExecutable) ?? 0,
+            ActiveCleanupWorkbench.Review.Selections.Count,
+            ActiveCleanupWorkbench.HiddenBatchCount,
+            !IsCleanupSyntheticReviewActive && runConfirmed,
+            !IsCleanupSyntheticReviewActive && activeRun is { IsCompleted: false },
             advisorSession.State.Stage.ToString(),
             currentStatus?.Kind.ToString(),
             currentStatus?.Source.ToString(),
             currentStatus?.Message,
             currentStatus?.CreatedAtUtc,
             currentStatus?.ExpiresAtUtc,
-            candidateFilter.Expression,
-            candidateFilter.IsValid,
+            ActiveCleanupWorkbench.Filter.Expression,
+            ActiveCleanupWorkbench.Filter.IsValid,
             visibleCandidateCount,
             settingsPanel.CreateBridgeTruth());
     }
@@ -559,7 +629,7 @@ internal sealed class SquireTabPanel : IDisposable
             () => operationalStatus.Dismiss(DateTimeOffset.UtcNow));
     }
 
-    private static void DrawWaitingForAnalysis()
+    private void DrawWaitingForAnalysis()
     {
         ImGui.Spacing();
         DalamudUiChrome.DrawCallout(
@@ -567,7 +637,13 @@ internal sealed class SquireTabPanel : IDisposable
             "Preparing equipment analysis",
             "Squire is obtaining the first current equipment snapshot. Cleanup controls will appear automatically when it is complete.",
             SquireUiTheme.Current,
-            DalamudUiTone.Neutral);
+            DalamudUiTone.Neutral,
+#if DEBUG
+            config.EnableMarketAcquisitionDryRunTools ? DrawCleanupSyntheticReviewToggle : null
+#else
+            null
+#endif
+        );
     }
 
     private static void DrawSummary(SquireAnalysis value)
@@ -622,6 +698,13 @@ internal sealed class SquireTabPanel : IDisposable
                     showSnapshotDiagnostics,
                     null,
                     ToggleSnapshotDiagnostics);
+#if DEBUG
+                if (config.EnableMarketAcquisitionDryRunTools)
+                {
+                    ImGui.SameLine();
+                    DrawCleanupSyntheticReviewToggle();
+                }
+#endif
             });
         if (showSnapshotDiagnostics)
         {
@@ -631,6 +714,113 @@ internal sealed class SquireTabPanel : IDisposable
     }
 
     private void ToggleSnapshotDiagnostics() => showSnapshotDiagnostics = !showSnapshotDiagnostics;
+
+#if DEBUG
+    private static readonly SquireCleanupSyntheticScenarioKind[] CleanupSyntheticScenarioOrder =
+    [
+        SquireCleanupSyntheticScenarioKind.CompleteZero,
+        SquireCleanupSyntheticScenarioKind.Populated,
+        SquireCleanupSyntheticScenarioKind.FilteredZero,
+        SquireCleanupSyntheticScenarioKind.InvalidLastValid,
+        SquireCleanupSyntheticScenarioKind.HiddenSelected,
+    ];
+
+    private void DrawCleanupSyntheticReviewToggle()
+    {
+        var active = cleanupSyntheticReview is not null;
+        var entry = ResolveCleanupSyntheticReviewEntry();
+        var label = active
+            ? "Return to live cleanup##SquireCleanupSynthetic"
+            : "Load deterministic review##SquireCleanupSynthetic";
+        if (DalamudUiControls.Button(
+                label,
+                SquireUiTheme.Current,
+                DalamudUiTone.Neutral,
+                quiet: true,
+                enabled: entry.Enabled))
+            ToggleCleanupSyntheticReview();
+        RegisterLastControl(
+            SquireCleanupReviewedControlIds.SyntheticReview,
+            active ? "Return to live Cleanup" : "Load deterministic Cleanup review",
+            AgentBridgeUiControlKind.Button,
+            entry.Enabled,
+            active,
+            entry.Status,
+            ToggleCleanupSyntheticReview);
+    }
+
+    private void DrawCleanupSyntheticReviewHeader()
+    {
+        DalamudUiChrome.DrawCallout(
+            "SquireCleanupSyntheticReview",
+            "Deterministic cleanup review",
+            "Frozen equipment evidence exercises ready-state presentation. Cleanup confirmation and execution remain unavailable.",
+            SquireUiTheme.Current,
+            DalamudUiTone.Warning);
+        ImGui.Spacing();
+        foreach (var scenario in CleanupSyntheticScenarioOrder)
+        {
+            if (scenario != CleanupSyntheticScenarioOrder[0])
+                ImGui.SameLine();
+            var selected = cleanupSyntheticReview?.Scenario == scenario;
+            if (DalamudUiControls.SegmentedOption(
+                    $"{CleanupSyntheticScenarioLabel(scenario)}##SquireCleanupSynthetic{scenario}",
+                    selected,
+                    SquireUiTheme.Current,
+                    new(112f, 0)))
+                LoadCleanupSyntheticScenario(scenario);
+            var captured = scenario;
+            RegisterLastControl(
+                SquireCleanupReviewedControlIds.ForScenario(scenario),
+                $"Show {CleanupSyntheticScenarioLabel(scenario)} Cleanup review",
+                AgentBridgeUiControlKind.Select,
+                true,
+                selected,
+                CleanupSyntheticScenarioLabel(scenario),
+                () => LoadCleanupSyntheticScenario(captured));
+        }
+        ImGui.Spacing();
+    }
+
+    private void ToggleCleanupSyntheticReview()
+    {
+        var entry = ResolveCleanupSyntheticReviewEntry();
+        if (!entry.Enabled)
+            return;
+        if (cleanupSyntheticReview is not null)
+        {
+            cleanupSyntheticReview = null;
+            return;
+        }
+
+        if (entry.InvalidateLiveAuthorization)
+            InvalidateRunAuthorization();
+        cleanupSyntheticReview = SquireCleanupSyntheticReview.Create(SquireCleanupSyntheticScenarioKind.CompleteZero);
+    }
+
+    private SquireCleanupSyntheticReviewEntry ResolveCleanupSyntheticReviewEntry() =>
+        SquireCleanupSyntheticReviewAuthority.ResolveEntry(
+            cleanupSyntheticReview is not null,
+            activeRun is { IsCompleted: false },
+            activeRunRecovery is { IsCompleted: false });
+
+    private void LoadCleanupSyntheticScenario(SquireCleanupSyntheticScenarioKind scenario)
+    {
+        if (!SquireCleanupSyntheticReviewAuthority.AllowsScenarioMutation(cleanupSyntheticReview is not null))
+            return;
+        cleanupSyntheticReview = SquireCleanupSyntheticReview.Create(scenario);
+    }
+
+    private static string CleanupSyntheticScenarioLabel(SquireCleanupSyntheticScenarioKind scenario) => scenario switch
+    {
+        SquireCleanupSyntheticScenarioKind.Populated => "Populated",
+        SquireCleanupSyntheticScenarioKind.FilteredZero => "No matches",
+        SquireCleanupSyntheticScenarioKind.InvalidLastValid => "Invalid filter",
+        SquireCleanupSyntheticScenarioKind.HiddenSelected => "Hidden selected",
+        _ => "Complete zero",
+    };
+
+#endif
 
     private static void DrawDiagnostics(SquireAnalysis value)
     {
@@ -649,12 +839,14 @@ internal sealed class SquireTabPanel : IDisposable
         ImGui.EndTable();
     }
 
-    private void DrawTable(SquireAnalysis value)
+    private void DrawTable(SquireAnalysis value, SquireCandidate[] filteredRows)
     {
         var tableFlags = ImGuiTableFlags.RowBg | ImGuiTableFlags.Borders | ImGuiTableFlags.ScrollY |
                          ImGuiTableFlags.ScrollX | ImGuiTableFlags.Resizable | ImGuiTableFlags.Reorderable |
                          ImGuiTableFlags.Hideable | ImGuiTableFlags.Sortable;
-        var tableHeight = Math.Max(260f, ImGui.GetContentRegionAvail().Y * 0.62f);
+        var tableHeight = filteredRows.Length == 0
+            ? Math.Max(88f, ImGui.GetTextLineHeightWithSpacing() * 4f)
+            : Math.Max(260f, ImGui.GetContentRegionAvail().Y * 0.62f);
         if (!ImGui.BeginTable("##SquireCandidatesV3", SquireCandidateTableProjection.ColumnCount, tableFlags, new System.Numerics.Vector2(0, tableHeight)))
             return;
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultSort | ImGuiTableColumnFlags.NoHide, 180);
@@ -674,15 +866,11 @@ internal sealed class SquireTabPanel : IDisposable
         ImGui.TableSetupColumn("Item ID", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 75);
         ImGui.TableSetupScrollFreeze(1, 2);
         ImGui.TableHeadersRow();
-        if (showBatchOnly)
+        if (ActiveCleanupWorkbench.ShowBatchOnly)
             ImGui.BeginDisabled();
         DrawColumnFilters();
-        if (showBatchOnly)
+        if (ActiveCleanupWorkbench.ShowBatchOnly)
             ImGui.EndDisabled();
-        var filteredRows = ResolveVisibleCandidates(value);
-        var visibleFingerprints = filteredRows.Select(candidate => candidate.Instance.Fingerprint)
-            .ToHashSet(EquipmentInstanceFingerprintComparer.Instance);
-        hiddenBatchCount = review.Selections.Keys.Count(fingerprint => !visibleFingerprints.Contains(fingerprint));
         var rows = SquireCandidateTableProjection.Sort(filteredRows, ImGui.TableGetSortSpecs(), FormatRowState);
         var orderedFingerprints = rows.Select(row => row.Instance.Fingerprint).ToArray();
         for (var rowIndex = 0; rowIndex < rows.Length; rowIndex++)
@@ -691,7 +879,7 @@ internal sealed class SquireTabPanel : IDisposable
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
             var fingerprint = candidate.Instance.Fingerprint;
-            var selected = tableSelection.IsSelected(fingerprint);
+            var selected = ActiveCleanupWorkbench.TableSelection.IsSelected(fingerprint);
             var itemCursor = ImGui.GetCursorPos();
             var itemWidth = Math.Max(1f, ImGui.GetContentRegionAvail().X);
             var itemHeight = Math.Max(ImGui.GetTextLineHeightWithSpacing(), ImGui.CalcTextSize(candidate.Definition.Name, false, itemWidth).Y);
@@ -701,12 +889,12 @@ internal sealed class SquireTabPanel : IDisposable
                 new System.Numerics.Vector2(0, itemHeight));
             if (interaction.Activated)
             {
-                focusedItem = fingerprint;
-                if (selectionMode)
+                ActiveCleanupWorkbench.FocusedItem = fingerprint;
+                if (ActiveCleanupWorkbench.SelectionMode)
                 {
                     var io = ImGui.GetIO();
-                    var previous = tableSelection.SelectedKeys.ToHashSet(EquipmentInstanceFingerprintComparer.Instance);
-                    tableSelection.ApplyClick(
+                    var previous = ActiveCleanupWorkbench.TableSelection.SelectedKeys.ToHashSet(EquipmentInstanceFingerprintComparer.Instance);
+                    ActiveCleanupWorkbench.TableSelection.ApplyClick(
                         orderedFingerprints,
                         rowIndex,
                         io.KeyCtrl,
@@ -715,13 +903,13 @@ internal sealed class SquireTabPanel : IDisposable
                     ReconcileTableSelection(value, previous);
                 }
             }
-            if (selectionMode &&
-                tableSelection.IsDragging &&
+            if (ActiveCleanupWorkbench.SelectionMode &&
+                ActiveCleanupWorkbench.TableSelection.IsDragging &&
                 interaction.Hovered &&
                 ImGui.IsMouseDragging(ImGuiMouseButton.Left))
             {
-                var previous = tableSelection.SelectedKeys.ToHashSet(EquipmentInstanceFingerprintComparer.Instance);
-                tableSelection.ApplyDrag(orderedFingerprints, rowIndex);
+                var previous = ActiveCleanupWorkbench.TableSelection.SelectedKeys.ToHashSet(EquipmentInstanceFingerprintComparer.Instance);
+                ActiveCleanupWorkbench.TableSelection.ApplyDrag(orderedFingerprints, rowIndex);
                 ReconcileTableSelection(value, previous);
             }
             RegisterLastControl(
@@ -729,9 +917,9 @@ internal sealed class SquireTabPanel : IDisposable
                 $"Inspect {candidate.Definition.Name}",
                 AgentBridgeUiControlKind.Button,
                 true,
-                focusedItem is { } focused && EquipmentInstanceFingerprintComparer.Instance.Equals(focused, fingerprint),
+                ActiveCleanupWorkbench.FocusedItem is { } focused && EquipmentInstanceFingerprintComparer.Instance.Equals(focused, fingerprint),
                 FormatAssessment(candidate.Assessment),
-                () => focusedItem = fingerprint);
+                () => ActiveCleanupWorkbench.FocusedItem = fingerprint);
             if (candidate.IsExecutable)
             {
                 var controlId = $"squire.select.{fingerprint.Container}.{fingerprint.SlotIndex}";
@@ -744,8 +932,8 @@ internal sealed class SquireTabPanel : IDisposable
                     candidate.RecommendedDisposition.ToString(),
                     () =>
                     {
-                        focusedItem = fingerprint;
-                        SetSelection(value, candidate, !tableSelection.IsSelected(fingerprint));
+                        ActiveCleanupWorkbench.FocusedItem = fingerprint;
+                        SetSelection(value, candidate, !ActiveCleanupWorkbench.TableSelection.IsSelected(fingerprint));
                     });
             }
             else
@@ -759,8 +947,8 @@ internal sealed class SquireTabPanel : IDisposable
                     FormatAssessment(candidate.Assessment),
                     () =>
                     {
-                        focusedItem = fingerprint;
-                        SetSelection(value, candidate, !tableSelection.IsSelected(fingerprint));
+                        ActiveCleanupWorkbench.FocusedItem = fingerprint;
+                        SetSelection(value, candidate, !ActiveCleanupWorkbench.TableSelection.IsSelected(fingerprint));
                     });
             }
             ImGui.SetCursorPos(itemCursor);
@@ -792,28 +980,28 @@ internal sealed class SquireTabPanel : IDisposable
             }
             Cell(candidate.Definition.ItemId.ToString());
         }
-        if (tableSelection.IsDragging && ImGui.IsMouseReleased(ImGuiMouseButton.Left))
-            tableSelection.EndDrag();
+        if (ActiveCleanupWorkbench.TableSelection.IsDragging && ImGui.IsMouseReleased(ImGuiMouseButton.Left))
+            ActiveCleanupWorkbench.TableSelection.EndDrag();
         ImGui.EndTable();
     }
 
     private SquireCandidate[] ResolveVisibleCandidates(SquireAnalysis value)
     {
-        var baseRows = showBatchOnly
-            ? value.Candidates.Where(candidate => review.Selections.ContainsKey(candidate.Instance.Fingerprint)).ToArray()
-            : candidateFilter.Apply(
+        var baseRows = ActiveCleanupWorkbench.ShowBatchOnly
+            ? value.Candidates.Where(candidate => ActiveCleanupWorkbench.Review.Selections.ContainsKey(candidate.Instance.Fingerprint)).ToArray()
+            : ActiveCleanupWorkbench.Filter.Apply(
                 value.Candidates
-                    .Where(candidate => showNonEquipment || candidate.Definition.IsEquipment)
-                    .Where(candidate => showProtected || candidate.Assessment is not (SquireAssessment.Protected or SquireAssessment.EvaluationFailure)),
-                search);
-        return showBatchOnly
+                    .Where(candidate => ActiveCleanupWorkbench.ShowNonEquipment || candidate.Definition.IsEquipment)
+                    .Where(candidate => ActiveCleanupWorkbench.ShowProtected || candidate.Assessment is not (SquireAssessment.Protected or SquireAssessment.EvaluationFailure)),
+                ActiveCleanupWorkbench.Search);
+        return ActiveCleanupWorkbench.ShowBatchOnly
             ? baseRows
-            : SquireCandidateTableProjection.Filter(baseRows, columnFilters, FormatRowState);
+            : SquireCandidateTableProjection.Filter(baseRows, ActiveCleanupWorkbench.ColumnFilters, FormatRowState);
     }
 
     private void DrawBatchBar()
     {
-        var selections = review.Selections;
+        var selections = ActiveCleanupWorkbench.Review.Selections;
         var expertDelivery = selections.Count(pair => pair.Value == SquireDisposition.ExpertDelivery);
         var desynthesis = selections.Count(pair => pair.Value == SquireDisposition.Desynthesize);
         var vendor = selections.Count(pair => pair.Value == SquireDisposition.VendorSell);
@@ -821,21 +1009,23 @@ internal sealed class SquireTabPanel : IDisposable
         ImGui.Separator();
         ImGui.TextColored(MarketMafiosoUiTheme.Header,
             $"Cleanup batch: {selections.Count} | Expert Delivery {expertDelivery} | Desynthesize {desynthesis} | Vendor {vendor} | Discard {discard}");
-        if (hiddenBatchCount > 0 && !showBatchOnly)
+        if (ActiveCleanupWorkbench.HiddenBatchCount > 0 && !ActiveCleanupWorkbench.ShowBatchOnly)
         {
             ImGui.SameLine();
-            ImGui.TextColored(MarketMafiosoUiTheme.Warning, $"{hiddenBatchCount} hidden by filters");
+            ImGui.TextColored(MarketMafiosoUiTheme.Warning, $"{ActiveCleanupWorkbench.HiddenBatchCount} hidden by filters");
         }
+        var editedShowBatchOnly = ActiveCleanupWorkbench.ShowBatchOnly;
         ImGui.SameLine();
-        ImGui.Checkbox("Show batch only", ref showBatchOnly);
+        if (ImGui.Checkbox("Show batch only", ref editedShowBatchOnly))
+            ActiveCleanupWorkbench.ShowBatchOnly = editedShowBatchOnly;
         RegisterLastControl(
             "squire.show-batch-only",
             "Show cleanup-batch rows only",
             AgentBridgeUiControlKind.Toggle,
             true,
-            showBatchOnly,
-            hiddenBatchCount > 0 ? $"{hiddenBatchCount} hidden" : null,
-            () => showBatchOnly = !showBatchOnly);
+            ActiveCleanupWorkbench.ShowBatchOnly,
+            ActiveCleanupWorkbench.HiddenBatchCount > 0 ? $"{ActiveCleanupWorkbench.HiddenBatchCount} hidden" : null,
+            () => ActiveCleanupWorkbench.ShowBatchOnly = !ActiveCleanupWorkbench.ShowBatchOnly);
         if (!string.IsNullOrWhiteSpace(reconciliationNotice))
             ImGui.TextWrapped(reconciliationNotice);
     }
@@ -843,11 +1033,11 @@ internal sealed class SquireTabPanel : IDisposable
     private string FormatRowState(SquireCandidate candidate)
     {
         var fingerprint = candidate.Instance.Fingerprint;
-        if (review.Selections.ContainsKey(fingerprint))
+        if (ActiveCleanupWorkbench.Review.Selections.ContainsKey(fingerprint))
             return "Cleanup batch";
-        if (tableSelection.IsSelected(fingerprint))
+        if (ActiveCleanupWorkbench.TableSelection.IsSelected(fingerprint))
             return candidate.IsExecutable ? "Inspected" : "Inspection only";
-        return focusedItem is { } focused && EquipmentInstanceFingerprintComparer.Instance.Equals(focused, fingerprint) ? "Focused" : "—";
+        return ActiveCleanupWorkbench.FocusedItem is { } focused && EquipmentInstanceFingerprintComparer.Instance.Equals(focused, fingerprint) ? "Focused" : "—";
     }
 
     private void ReconcileTableSelection(
@@ -858,42 +1048,43 @@ internal sealed class SquireTabPanel : IDisposable
         foreach (var candidate in analysis.Candidates)
         {
             var fingerprint = candidate.Instance.Fingerprint;
-            var selected = tableSelection.IsSelected(fingerprint);
+            var selected = ActiveCleanupWorkbench.TableSelection.IsSelected(fingerprint);
             if (selected != previous.Contains(fingerprint))
             {
                 ReconcileSelectionReview(analysis, candidate, selected);
                 changed = true;
             }
         }
-        if (changed)
+        if (changed && !IsCleanupSyntheticReviewActive)
             InvalidateRunAuthorization();
     }
 
     private void SetSelection(SquireAnalysis analysis, SquireCandidate candidate, bool selected)
     {
         var fingerprint = candidate.Instance.Fingerprint;
-        var changed = tableSelection.SetSelected(fingerprint, selected);
+        var changed = ActiveCleanupWorkbench.TableSelection.SetSelected(fingerprint, selected);
         ReconcileSelectionReview(analysis, candidate, selected);
-        if (changed)
+        if (changed && !IsCleanupSyntheticReviewActive)
             InvalidateRunAuthorization();
     }
 
     private void ReconcileSelectionReview(SquireAnalysis analysis, SquireCandidate candidate, bool selected)
     {
         var fingerprint = candidate.Instance.Fingerprint;
-        if (selected && candidate.IsExecutable && !review.Selections.ContainsKey(fingerprint))
-            review.TrySelect(analysis, fingerprint, candidate.RecommendedDisposition);
-        else if ((!selected || !candidate.IsExecutable) && review.Selections.ContainsKey(fingerprint))
-            review.Remove(fingerprint);
+        if (selected && candidate.IsExecutable && !ActiveCleanupWorkbench.Review.Selections.ContainsKey(fingerprint))
+            ActiveCleanupWorkbench.Review.TrySelect(analysis, fingerprint, candidate.RecommendedDisposition);
+        else if ((!selected || !candidate.IsExecutable) && ActiveCleanupWorkbench.Review.Selections.ContainsKey(fingerprint))
+            ActiveCleanupWorkbench.Review.Remove(fingerprint);
     }
 
-    public void DrawDiagnosticTools() => routeDiagnosticsPanel.Draw(analysis, focusedItem);
+    public void DrawDiagnosticTools() => routeDiagnosticsPanel.Draw(analysis, cleanupWorkbench.FocusedItem);
 
     private void ClearSelectionOnly()
     {
-        tableSelection.Clear();
-        review.Clear();
-        InvalidateRunAuthorization();
+        ActiveCleanupWorkbench.TableSelection.Clear();
+        ActiveCleanupWorkbench.Review.Clear();
+        if (!IsCleanupSyntheticReviewActive)
+            InvalidateRunAuthorization();
     }
 
     private void InvalidateRunAuthorization()
@@ -907,16 +1098,17 @@ internal sealed class SquireTabPanel : IDisposable
     private void DrawColumnFilters()
     {
         ImGui.TableNextRow();
-        for (var column = 0; column < columnFilters.Length; column++)
+        var filters = ActiveCleanupWorkbench.ColumnFilters;
+        for (var column = 0; column < filters.Length; column++)
         {
             if (!ImGui.TableSetColumnIndex(column))
             {
                 // A hidden column must not retain a filter that invisibly removes rows.
-                columnFilters[column] = string.Empty;
+                filters[column] = string.Empty;
                 continue;
             }
             ImGui.SetNextItemWidth(-1);
-            ImGui.InputTextWithHint($"##SquireColumnFilter{column}", "Filter...", ref columnFilters[column], 96);
+            ImGui.InputTextWithHint($"##SquireColumnFilter{column}", "Filter...", ref filters[column], 96);
         }
     }
 
@@ -960,7 +1152,7 @@ internal sealed class SquireTabPanel : IDisposable
     private void DrawRunPanel(SquireAnalysis value)
     {
         ImGui.Separator();
-        var selections = review.Selections;
+        var selections = ActiveCleanupWorkbench.Review.Selections;
         ImGui.TextColored(MarketMafiosoUiTheme.Header, "Cleanup batch authorization");
         ImGui.TextUnformatted($"Selected: {selections.Count} | Expert Delivery: {selections.Count(pair => pair.Value == SquireDisposition.ExpertDelivery)} | Desynthesize: {selections.Count(pair => pair.Value == SquireDisposition.Desynthesize)} | Vendor: {selections.Count(pair => pair.Value == SquireDisposition.VendorSell)} | Discard: {selections.Count(pair => pair.Value == SquireDisposition.Discard)}");
         if (!value.Snapshot.Diagnostics.IsComplete)
@@ -972,30 +1164,46 @@ internal sealed class SquireTabPanel : IDisposable
                 value.Snapshot.Identity.Scope is null ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Error,
                 blockText);
         }
-        if (hiddenBatchCount > 0 && !showBatchOnly)
-            ImGui.TextColored(MarketMafiosoUiTheme.Error, $"Execution blocked: {hiddenBatchCount} cleanup-batch item(s) are hidden by the current filters. Enable 'Show batch only' to inspect the complete batch.");
-        var running = activeRun is { IsCompleted: false };
+        if (ActiveCleanupWorkbench.HiddenBatchCount > 0 && !ActiveCleanupWorkbench.ShowBatchOnly)
+            ImGui.TextColored(MarketMafiosoUiTheme.Error, $"Execution blocked: {ActiveCleanupWorkbench.HiddenBatchCount} cleanup-batch item(s) are hidden by the current filters. Enable 'Show batch only' to inspect the complete batch.");
+        var running = !IsCleanupSyntheticReviewActive && activeRun is { IsCompleted: false };
         var supportedBatch = selections.Values.All(disposition => disposition is
             SquireDisposition.ExpertDelivery or SquireDisposition.Desynthesize or SquireDisposition.VendorSell or SquireDisposition.Discard);
-        var batchValidation = ValidateSelectedBatch(value, selections);
-        var canRun = value.Snapshot.Diagnostics.IsComplete && selections.Count > 0 && supportedBatch &&
-                     hiddenBatchCount == 0 &&
-                     batchValidation?.Success == true && !running;
+        var batchValidation = IsCleanupSyntheticReviewActive ? null : ValidateSelectedBatch(value, selections);
+        var canRun = SquireCleanupRunAuthorization.Resolve(
+            IsCleanupSyntheticReviewActive,
+            value.Snapshot.Diagnostics.IsComplete,
+            selections.Count,
+            supportedBatch,
+            ActiveCleanupWorkbench.HiddenBatchCount,
+            batchValidation?.Success == true,
+            running);
+        var displayedRunConfirmed = IsCleanupSyntheticReviewActive ? false : runConfirmed;
         if (!canRun)
             ImGui.BeginDisabled();
-        if (ImGui.Checkbox("I confirm this cleanup batch", ref runConfirmed))
-            confirmedBatchKey = runConfirmed ? batchValidationKey : null;
+        if (ImGui.Checkbox("I confirm this cleanup batch", ref displayedRunConfirmed))
+        {
+            if (SquireCleanupSyntheticReviewAuthority.AllowsLiveRunMutation(IsCleanupSyntheticReviewActive))
+            {
+                runConfirmed = displayedRunConfirmed;
+                confirmedBatchKey = runConfirmed ? batchValidationKey : null;
+            }
+        }
         RegisterLastControl(
             "squire.run.confirm",
             "Confirm the cleanup batch",
             AgentBridgeUiControlKind.Toggle,
             canRun,
-            runConfirmed,
-            batchValidation is null
-                ? "No cleanup-batch selection."
+            displayedRunConfirmed,
+            IsCleanupSyntheticReviewActive
+                ? "Deterministic review never authorizes cleanup."
+                : batchValidation is null
+                    ? "No cleanup-batch selection."
                 : $"{batchValidation.Code}: {batchValidation.Message}",
             () =>
             {
+                if (!SquireCleanupSyntheticReviewAuthority.AllowsLiveRunMutation(IsCleanupSyntheticReviewActive))
+                    return;
                 runConfirmed = !runConfirmed;
                 confirmedBatchKey = runConfirmed ? batchValidationKey : null;
             });
@@ -1053,12 +1261,14 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void StartRun(SquireAnalysis value)
     {
-        _ = ValidateSelectedBatch(value, review.Selections);
+        if (!SquireCleanupSyntheticReviewAuthority.AllowsLiveRunMutation(IsCleanupSyntheticReviewActive))
+            return;
+        _ = ValidateSelectedBatch(value, cleanupWorkbench.Review.Selections);
         if (!runConfirmed || !string.Equals(confirmedBatchKey, batchValidationKey, StringComparison.Ordinal) || activeRun is { IsCompleted: false })
             return;
         try
         {
-            var plan = new SquireActionPlanner().Create(value, review.Selections, DateTimeOffset.UtcNow,
+            var plan = new SquireActionPlanner().Create(value, cleanupWorkbench.Review.Selections, DateTimeOffset.UtcNow,
                 CreateProtectionPolicy(value.Snapshot.Identity.Scope?.LocalContentId), capabilitySource.Capture());
             runConfirmed = false;
             runCancellation = new CancellationTokenSource();
@@ -1095,7 +1305,9 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void StartDiagnosticRun(SquireAnalysis value)
     {
-        _ = ValidateSelectedBatch(value, review.Selections);
+        if (!SquireCleanupSyntheticReviewAuthority.AllowsLiveRunMutation(IsCleanupSyntheticReviewActive))
+            return;
+        _ = ValidateSelectedBatch(value, cleanupWorkbench.Review.Selections);
         if (!runConfirmed || !string.Equals(confirmedBatchKey, batchValidationKey, StringComparison.Ordinal) || activeRun is { IsCompleted: false })
             return;
         if (uiStateCapture.IsRecording)
@@ -1108,7 +1320,7 @@ internal sealed class SquireTabPanel : IDisposable
         }
         try
         {
-            var plan = new SquireActionPlanner().Create(value, review.Selections, DateTimeOffset.UtcNow,
+            var plan = new SquireActionPlanner().Create(value, cleanupWorkbench.Review.Selections, DateTimeOffset.UtcNow,
                 CreateProtectionPolicy(value.Snapshot.Identity.Scope?.LocalContentId), capabilitySource.Capture());
             runConfirmed = false;
             runCancellation = new CancellationTokenSource();
@@ -1219,7 +1431,9 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void RetryLastRunFromCheckpoint()
     {
-        if (lastRun is not { Retryable.Count: > 0 } run || activeRun is { IsCompleted: false })
+        if (!SquireCleanupSyntheticReviewAuthority.AllowsLiveRunMutation(IsCleanupSyntheticReviewActive) ||
+            lastRun is not { Retryable.Count: > 0 } run ||
+            activeRun is { IsCompleted: false })
             return;
 
         var checkpointPlan = run.CreateCheckpointPlan();
@@ -1257,7 +1471,8 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void RecoverLastRunInteraction()
     {
-        if (activeRunRecovery is { IsCompleted: false })
+        if (!SquireCleanupSyntheticReviewAuthority.AllowsLiveRunMutation(IsCleanupSyntheticReviewActive) ||
+            activeRunRecovery is { IsCompleted: false })
             return;
         activeRunRecovery = RecoverLastRunInteractionAsync();
     }

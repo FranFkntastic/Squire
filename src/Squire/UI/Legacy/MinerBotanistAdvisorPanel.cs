@@ -5,6 +5,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Utility.Raii;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Equipment;
 using Franthropy.Dalamud.UI.Plots;
@@ -128,25 +129,7 @@ internal sealed class MinerBotanistAdvisorPanel
 #if DEBUG
         if (syntheticReviewActive)
         {
-            ImGui.TextColored(MarketMafiosoUiTheme.Warning, s4GoldenFixture is not null
-                ? "S4 CRAFT HANDOFF PROBE — FROZEN DATA, DRY RUN ONLY"
-                : dryRunFixture is null
-                    ? "DEBUG REPLAY — model decisions with frozen evidence prices"
-                    : "ROUTE INTEGRATION PROBE — NOT A GEAR RECOMMENDATION");
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, s4GoldenFixture is not null
-                ? "Production recipe, Advisor, Artisan export, and material-only Workbench boundaries; no live character, purchase, or crafting action."
-                : dryRunFixture?.Diagnostic ??
-                  "Item names are game data; only marketable components use Aether sale-history medians. No live character or live listing is used.");
-            if (dryRunFixture is null && s4GoldenFixture is null)
-                ImGui.TextColored(MarketMafiosoUiTheme.Muted, MinerBotanistAdvisorSyntheticReview.PriceEvidenceLabel);
-            ImGui.TextColored(syntheticPresentation!.AdviceIsRetained ? MarketMafiosoUiTheme.Warning : StatusColor(syntheticPresentation.Stage),
-                syntheticPresentation.AdviceIsRetained
-                    ? $"LAST VALID FRONTIER · {syntheticPresentation.Label}"
-                    : syntheticPresentation.Label);
-            if (syntheticPresentation.ShowProgress)
-                ImGui.ProgressBar((float)syntheticPresentation.Completed / syntheticPresentation.Total, new Vector2(-1, 0),
-                    $"{syntheticPresentation.Completed:N0} / {syntheticPresentation.Total:N0}");
-            ImGui.TextColored(StatusColor(syntheticPresentation.Stage), syntheticPresentation.Message);
+            DrawSyntheticReviewStatus(syntheticPresentation!);
         }
         else
 #endif
@@ -172,7 +155,12 @@ internal sealed class MinerBotanistAdvisorPanel
         if (syntheticReviewActive)
         {
             ImGui.TextColored(MarketMafiosoUiTheme.Header, selected.VariantLabels.FirstOrDefault() ?? selected.Candidate.SolutionId);
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, string.Join(" · ", selected.VariantLabels.Skip(2)));
+            var decisionDetail = string.Join(" · ", selected.VariantLabels.Skip(2));
+            if (!string.IsNullOrWhiteSpace(decisionDetail))
+            {
+                using var muted = ImRaii.PushColor(ImGuiCol.Text, MarketMafiosoUiTheme.Muted);
+                ImGui.TextWrapped(decisionDetail);
+            }
         }
 #endif
         DrawAdvisorWorkspace(advice, selected);
@@ -339,7 +327,7 @@ internal sealed class MinerBotanistAdvisorPanel
             var label = syntheticReviewAdvice is null
                 ? "Load synthetic review##SquireAdvisorSynthetic"
                 : "Return to live view##SquireAdvisorSynthetic";
-            if (ImGui.Button(label))
+            if (DalamudUiControls.Button(label, SquireUiTheme.Current, DalamudUiTone.Neutral, quiet: true))
                 ToggleSyntheticReview();
             RegisterLastControl(
                 AdvisorReviewedControlIds.SyntheticReview,
@@ -354,7 +342,12 @@ internal sealed class MinerBotanistAdvisorPanel
         {
             DrawSyntheticScenarioControl();
             var canBuildDryRunFixture = config.EnableMarketAcquisitionDryRunTools && dryRunFixtureTask is null;
-            if (ImGuiUi.Button("Build live dry-run fixture", canBuildDryRunFixture))
+            if (DalamudUiControls.Button(
+                    "Build current-listing dry run##SquireAdvisorDryRun",
+                    SquireUiTheme.Current,
+                    DalamudUiTone.Neutral,
+                    quiet: true,
+                    enabled: canBuildDryRunFixture))
                 BeginDryRunFixture();
             RegisterLastControl(
                 "squire.outfitter.advisor.build-dry-run-fixture",
@@ -377,8 +370,11 @@ internal sealed class MinerBotanistAdvisorPanel
                 var canToggle = !visible || visibleSyntheticContexts.Count > 1;
                 if (!canToggle)
                     ImGui.BeginDisabled();
-                if (ImGui.Checkbox($"{ContextSeriesLabel(candidate)}##SquireAdvisorSyntheticSeries{candidate}", ref visible))
-                    SetSyntheticSeriesVisible(candidate, visible);
+                if (DalamudUiControls.SegmentedOption(
+                        $"{ContextSeriesLabel(candidate)}##SquireAdvisorSyntheticSeries{candidate}",
+                        visible,
+                        SquireUiTheme.Current))
+                    SetSyntheticSeriesVisible(candidate, !visible);
                 if (!canToggle)
                     ImGui.EndDisabled();
                 RegisterLastControl(
@@ -395,6 +391,53 @@ internal sealed class MinerBotanistAdvisorPanel
         }
 #endif
     }
+
+#if DEBUG
+    private void DrawSyntheticReviewStatus(MinerBotanistAdvisorSyntheticPresentation presentation)
+    {
+        var title = s4GoldenFixture is not null
+            ? "Frozen craft handoff review"
+            : dryRunFixture is null
+                ? "Deterministic advisor review"
+                : "Current-listing route review";
+        var detail = s4GoldenFixture is not null
+            ? "Review production recipe, Artisan export, and material-only Workbench boundaries without purchase or crafting."
+            : dryRunFixture?.Diagnostic ??
+              "Review frozen model decisions and evidence without using the active character or current market listings.";
+        DalamudUiChrome.DrawCallout(
+            "SquireAdvisorSyntheticReview",
+            title,
+            detail,
+            SquireUiTheme.Current,
+            DalamudUiTone.Warning);
+        ImGui.Spacing();
+        var tone = presentation.Stage switch
+        {
+            MinerBotanistAdvisorSessionStage.Complete => DalamudUiTone.Success,
+            MinerBotanistAdvisorSessionStage.Abstained => DalamudUiTone.Warning,
+            _ => DalamudUiTone.Neutral,
+        };
+        DalamudUiChrome.DrawStatusFact(
+            "Evidence",
+            presentation.AdviceIsRetained
+                ? $"Last valid frontier · {presentation.Label}"
+                : presentation.Label,
+            SquireUiTheme.Current.Palette,
+            tone);
+        if (presentation.ShowProgress)
+            ImGui.ProgressBar(
+                (float)presentation.Completed / presentation.Total,
+                new Vector2(-1, 0),
+                $"{presentation.Completed:N0} / {presentation.Total:N0}");
+        using (ImRaii.PushColor(ImGuiCol.Text, StatusColor(presentation.Stage)))
+            ImGui.TextWrapped(presentation.Message);
+        if (dryRunFixture is null && s4GoldenFixture is null)
+        {
+            using var muted = ImRaii.PushColor(ImGuiCol.Text, MarketMafiosoUiTheme.Muted);
+            ImGui.TextWrapped(MinerBotanistAdvisorSyntheticReview.PriceEvidenceLabel);
+        }
+    }
+#endif
 
     private void Begin()
     {
@@ -1392,7 +1435,11 @@ internal sealed class MinerBotanistAdvisorPanel
             return;
         if (presentation.ShowCancel)
             ImGui.SameLine();
-        if (ImGui.Button("Load deterministic review##SquireAdvisorSyntheticRecovery"))
+        if (DalamudUiControls.Button(
+                "Load deterministic review##SquireAdvisorSyntheticRecovery",
+                SquireUiTheme.Current,
+                DalamudUiTone.Neutral,
+                quiet: true))
             ToggleSyntheticReview();
         RegisterLastControl(
             AdvisorReviewedControlIds.SyntheticReview,

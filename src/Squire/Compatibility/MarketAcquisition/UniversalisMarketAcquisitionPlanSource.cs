@@ -32,6 +32,7 @@ public sealed class UniversalisMarketAcquisitionPlanSource : IMarketAcquisitionB
             MaxConcurrentRequests = UniversalisBulkClient.DefaultMaxConcurrentRequests,
             MaxAttemptsPerChunk = 1,
             MaximumSplitDepth = 1,
+            RetryMissingItems = false,
             AttemptTimeout = TimeSpan.FromSeconds(15),
         });
     }

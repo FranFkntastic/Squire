@@ -35,6 +35,10 @@ public sealed class SquireCleanupRuleStore
     {
         var rules = GetApplicable(characterContentId);
         return new SquireProtectionPolicy(
+            ProtectSignedGear: config.Squire.ProtectPlayerSignedGear,
+            ProtectFutureLevelingGear: config.Squire.ProtectFutureLevelingGearOptIn,
+            ProtectBlueAndPurpleGear: config.Squire.ProtectBlueAndPurpleGear,
+            AllowRiskyMateriaRetrieval: config.Squire.AllowRiskyMateriaRetrieval,
             CharacterContentId: characterContentId ?? 0,
             CleanupRules: rules);
     }

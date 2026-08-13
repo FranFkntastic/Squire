@@ -42,7 +42,9 @@ public sealed class SquireSettingsStateTests
         state.UpdatePolicy(settings => settings.ProtectPlayerSignedGear = true);
 
         Assert.True(configuration.Squire.ProtectPlayerSignedGear);
-        Assert.True((new SquireCleanupRuleStore(configuration).CreatePolicy(null).CleanupRules ?? [])
+        var runtimePolicy = new SquireCleanupRuleStore(configuration).CreatePolicy(null);
+        Assert.True(runtimePolicy.ProtectSignedGear);
+        Assert.True((runtimePolicy.CleanupRules ?? [])
             .Single(rule => rule.Id == "builtin.protect-player-signed").Enabled);
         Assert.Equal(1, configuration.SaveCount);
         Assert.Equal(1, reevaluations);
@@ -64,7 +66,12 @@ public sealed class SquireSettingsStateTests
             settings.AllowRiskyMateriaRetrieval = false;
         });
 
-        var rules = (new SquireCleanupRuleStore(configuration).CreatePolicy(null).CleanupRules ?? [])
+        var runtimePolicy = new SquireCleanupRuleStore(configuration).CreatePolicy(null);
+        Assert.False(runtimePolicy.ProtectBlueAndPurpleGear);
+        Assert.True(runtimePolicy.ProtectSignedGear);
+        Assert.True(runtimePolicy.ProtectFutureLevelingGear);
+        Assert.False(runtimePolicy.AllowRiskyMateriaRetrieval);
+        var rules = (runtimePolicy.CleanupRules ?? [])
             .ToDictionary(rule => rule.Id, StringComparer.Ordinal);
         Assert.False(rules["builtin.protect-high-rarity"].Enabled);
         Assert.True(rules["builtin.protect-player-signed"].Enabled);

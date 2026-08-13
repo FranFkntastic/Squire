@@ -240,8 +240,11 @@ internal sealed class SquireTabPanel : IDisposable
                 enabled: analysis is not null))
             Export();
         RegisterLastControl("squire.export", "Export Squire evaluation snapshot", AgentBridgeUiControlKind.Button, analysis is not null, false, null, Export);
-        ImGui.SameLine();
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, status);
+        if (ShouldDrawInlineStatus(analysis, status))
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, status);
+        }
         ImGui.Separator();
 
         if (analysis is null)
@@ -418,11 +421,7 @@ internal sealed class SquireTabPanel : IDisposable
             var executable = analysis.Candidates.Count(candidate => candidate.IsExecutable);
             if (!runActive)
             {
-                status = snapshot.Identity.Scope is null
-                    ? "Waiting for an active character."
-                    : analysis.IsActionable
-                        ? $"Complete snapshot; {executable} executable candidate(s)."
-                        : "Snapshot is incomplete; actions are blocked.";
+                status = BuildSnapshotStatus(analysis, executable);
             }
             reconciliationNotice = reconciliation?.RemovedReasons.Count > 0
                 ? $"{trigger} removed {reconciliation.RemovedReasons.Count} stale cleanup-batch item(s): {string.Join(" ", reconciliation.RemovedReasons.Take(3))}"
@@ -444,6 +443,22 @@ internal sealed class SquireTabPanel : IDisposable
     public void RefreshForBridge() => Refresh();
 
     public AgentBridgeSquireTruth CreateAgentBridgeTruth() => SquireBridgeTruthFactory.Create(analysis, status, actionAdapter);
+
+    private static bool ShouldDrawInlineStatus(SquireAnalysis? value, string currentStatus)
+    {
+        if (value is null || value.Snapshot.Diagnostics.IsComplete)
+            return true;
+
+        var executable = value.Candidates.Count(candidate => candidate.IsExecutable);
+        return !string.Equals(currentStatus, BuildSnapshotStatus(value, executable), StringComparison.Ordinal);
+    }
+
+    private static string BuildSnapshotStatus(SquireAnalysis value, int executable) =>
+        value.Snapshot.Identity.Scope is null
+            ? "Waiting for an active character."
+            : value.IsActionable
+                ? $"Complete snapshot; {executable} executable candidate(s)."
+                : "Snapshot is incomplete; actions are blocked.";
 
     private static void DrawSummary(SquireAnalysis value)
     {

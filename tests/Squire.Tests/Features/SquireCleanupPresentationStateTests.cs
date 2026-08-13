@@ -5,6 +5,59 @@ namespace Squire.Tests.Features;
 
 public sealed class SquireCleanupPresentationStateTests
 {
+    [Fact]
+    public void Cleanup_toolbar_has_persistent_label_stable_control_and_minimum_target_height()
+    {
+        Assert.Equal("Filter candidates", SquireCleanupToolbarPresentation.FilterLabel);
+        Assert.Equal("Columns", SquireCleanupToolbarPresentation.ColumnsLabel);
+        Assert.Equal("squire.cleanup.columns", SquireCleanupToolbarPresentation.ColumnsControlId);
+
+        var paddingY = SquireCleanupToolbarPresentation.ResolveFramePaddingY(fontSize: 13f, currentPaddingY: 3f);
+        Assert.True(13f + (paddingY * 2f) >= SquireCleanupToolbarPresentation.MinimumControlHeight);
+        Assert.Equal(24f, SquireCleanupToolbarPresentation.ResolveControlHeight(currentFrameHeight: 22f));
+        Assert.Equal(31f, SquireCleanupToolbarPresentation.ResolveControlHeight(currentFrameHeight: 31f));
+    }
+
+    [Fact]
+    public void Cleanup_column_menu_request_is_one_shot_and_owns_no_cleanup_state()
+    {
+        var request = new SquireCleanupColumnMenuRequest();
+        var workbench = new SquireCleanupWorkbenchState("quality:hq", showProtected: true, showNonEquipment: false)
+        {
+            SelectionMode = true,
+        };
+        var runAllowedBefore = SquireCleanupRunAuthorization.Resolve(
+            deterministicReviewActive: false,
+            snapshotComplete: true,
+            selectionCount: 1,
+            supportedBatch: true,
+            hiddenSelectionCount: 0,
+            validationSucceeded: true,
+            running: false);
+
+        Assert.False(request.Consume());
+        request.Request();
+        Assert.True(request.Consume());
+        Assert.False(request.Consume());
+
+        Assert.Equal("quality:hq", workbench.Search);
+        Assert.True(workbench.ShowProtected);
+        Assert.False(workbench.ShowNonEquipment);
+        Assert.True(workbench.SelectionMode);
+        Assert.Empty(workbench.Review.Selections);
+        Assert.Empty(workbench.TableSelection.SelectedKeys);
+        Assert.Equal(
+            runAllowedBefore,
+            SquireCleanupRunAuthorization.Resolve(
+                deterministicReviewActive: false,
+                snapshotComplete: true,
+                selectionCount: 1,
+                supportedBatch: true,
+                hiddenSelectionCount: 0,
+                validationSucceeded: true,
+                running: false));
+    }
+
     [Theory]
     [InlineData(false, false, false, 0, "WaitingForAnalysis")]
     [InlineData(true, false, false, 0, "WaitingForCharacter")]

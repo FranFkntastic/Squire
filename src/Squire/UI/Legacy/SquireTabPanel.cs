@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Utility.Raii;
 using Dalamud.Plugin.Services;
 using MarketMafioso.Squire;
 using MarketMafioso.Squire.Outfitter;
@@ -62,6 +63,7 @@ internal sealed class SquireTabPanel : IDisposable
     private string? reconciliationNotice;
     private string? lastAnalysisInputSignature;
     private readonly SquireOperationalStatusState operationalStatus = new();
+    private readonly SquireCleanupColumnMenuRequest cleanupColumnMenuRequest = new();
     private bool runConfirmed;
     private string? confirmedBatchKey;
     private CancellationTokenSource? runCancellation;
@@ -329,15 +331,25 @@ internal sealed class SquireTabPanel : IDisposable
             return;
         }
 
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextUnformatted(SquireCleanupToolbarPresentation.FilterLabel);
+        ImGui.SameLine();
         var editedSearch = ActiveCleanupWorkbench.Search;
         ImGui.SetNextItemWidth(280);
-        if (ImGui.InputTextWithHint("##SquireSearch", "Search or filter, e.g. quality:hq", ref editedSearch, 160))
+        var toolbarStyle = ImGui.GetStyle();
+        var toolbarPaddingY = SquireCleanupToolbarPresentation.ResolveFramePaddingY(
+            ImGui.GetFontSize(),
+            toolbarStyle.FramePadding.Y);
+        using (ImRaii.PushStyle(ImGuiStyleVar.FramePadding, new System.Numerics.Vector2(toolbarStyle.FramePadding.X, toolbarPaddingY)))
         {
-            ActiveCleanupWorkbench.Search = editedSearch;
-            if (!IsCleanupSyntheticReviewActive)
+            if (ImGui.InputTextWithHint("##SquireSearch", "Search or filter, e.g. quality:hq", ref editedSearch, 160))
             {
-                config.Squire.Search = editedSearch;
-                config.Save();
+                ActiveCleanupWorkbench.Search = editedSearch;
+                if (!IsCleanupSyntheticReviewActive)
+                {
+                    config.Squire.Search = editedSearch;
+                    config.Save();
+                }
             }
         }
         var editedShowProtected = ActiveCleanupWorkbench.ShowProtected;
@@ -401,7 +413,22 @@ internal sealed class SquireTabPanel : IDisposable
             }
         }
         ImGui.SameLine();
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Right-click a table header to choose columns.");
+        if (DalamudUiControls.Button(
+                $"{SquireCleanupToolbarPresentation.ColumnsLabel}##SquireCleanupColumns",
+                SquireUiTheme.Current,
+                DalamudUiTone.Neutral,
+                quiet: true,
+                size: new(0f, SquireCleanupToolbarPresentation.ResolveControlHeight(ImGui.GetFrameHeight())),
+                tooltip: "Show, hide, or reorder table columns."))
+            cleanupColumnMenuRequest.Request();
+        RegisterLastControl(
+            SquireCleanupToolbarPresentation.ColumnsControlId,
+            "Choose Cleanup table columns",
+            AgentBridgeUiControlKind.Button,
+            true,
+            false,
+            null,
+            cleanupColumnMenuRequest.Request);
         ActiveCleanupWorkbench.Filter.SetExpression(ActiveCleanupWorkbench.Search);
         if (ActiveCleanupWorkbench.Filter.Error is { } filterError)
             ImGui.TextColored(MarketMafiosoUiTheme.Error, $"Check the filter: {filterError}");
@@ -875,6 +902,8 @@ internal sealed class SquireTabPanel : IDisposable
         ImGui.TableSetupColumn("Reason", ImGuiTableColumnFlags.WidthFixed, 320);
         ImGui.TableSetupColumn("Item ID", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 75);
         ImGui.TableSetupScrollFreeze(1, 2);
+        if (cleanupColumnMenuRequest.Consume())
+            ImGuiP.TableOpenContextMenu();
         ImGui.TableHeadersRow();
         if (ActiveCleanupWorkbench.ShowBatchOnly)
             ImGui.BeginDisabled();

@@ -33,6 +33,44 @@ internal static class SquireCleanupSurfaceStateResolver
     }
 }
 
+internal static class SquireCleanupToolbarPresentation
+{
+    public const string FilterLabel = "Filter candidates";
+    public const string ColumnsLabel = "Columns";
+    public const string ColumnsControlId = "squire.cleanup.columns";
+    public const float MinimumControlHeight = 24f;
+
+    public static float ResolveFramePaddingY(float fontSize, float currentPaddingY)
+    {
+        if (fontSize < 0f)
+            throw new ArgumentOutOfRangeException(nameof(fontSize));
+        if (currentPaddingY < 0f)
+            throw new ArgumentOutOfRangeException(nameof(currentPaddingY));
+        return Math.Max(currentPaddingY, (MinimumControlHeight - fontSize) * 0.5f);
+    }
+
+    public static float ResolveControlHeight(float currentFrameHeight)
+    {
+        if (currentFrameHeight < 0f)
+            throw new ArgumentOutOfRangeException(nameof(currentFrameHeight));
+        return Math.Max(MinimumControlHeight, currentFrameHeight);
+    }
+}
+
+internal sealed class SquireCleanupColumnMenuRequest
+{
+    private bool requested;
+
+    public void Request() => requested = true;
+
+    public bool Consume()
+    {
+        var result = requested;
+        requested = false;
+        return result;
+    }
+}
+
 internal enum SquireOperationalStatusKind
 {
     Progress,

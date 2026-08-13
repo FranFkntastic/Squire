@@ -51,7 +51,8 @@ public sealed record OutfitterMarketEvidenceRequest(
     OutfitterMarketCoverageMode CoverageMode = OutfitterMarketCoverageMode.ExhaustiveWithinScope,
     int? SampleSize = null,
     int MaxConcurrency = 4,
-    IReadOnlyList<uint>? SampleItemIds = null);
+    IReadOnlyList<uint>? SampleItemIds = null,
+    string? QueryScope = null);
 
 public sealed record OutfitterMarketEvidenceCacheKey(
     string SourceKey,
@@ -87,7 +88,8 @@ public sealed record OutfitterMarketCoverage(
     int CatalogItemCount,
     int QueriedItemCount,
     int ListingLimit,
-    IReadOnlyList<uint> QueriedItemIds)
+    IReadOnlyList<uint> QueriedItemIds,
+    string? QueryScope = null)
 {
     public bool IsSampled => Mode == OutfitterMarketCoverageMode.Sampled;
 }
@@ -129,8 +131,15 @@ public sealed record OutfitterMarketEvidenceBook(
                Coverage.Mode == request.CoverageMode &&
                Coverage.CatalogItemCount == request.ItemIds.Where(itemId => itemId != 0).Distinct().Count() &&
                Coverage.ListingLimit == Math.Clamp(request.ListingLimit, 1, 100) &&
+               string.Equals(
+                   string.IsNullOrWhiteSpace(Coverage.QueryScope) ? Region : Coverage.QueryScope,
+                   EffectiveQueryScope(request),
+                   StringComparison.OrdinalIgnoreCase) &&
                Coverage.QueriedItemIds.Order().SequenceEqual(requestedIds);
     }
+
+    private static string EffectiveQueryScope(OutfitterMarketEvidenceRequest request) =>
+        string.IsNullOrWhiteSpace(request.QueryScope) ? request.Region.Trim() : request.QueryScope.Trim();
 }
 
 public sealed record OutfitterMarketDiscoveryProgress(

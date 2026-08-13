@@ -95,7 +95,8 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
             catalog.Length,
             selected.Length,
             Math.Clamp(request.ListingLimit, 1, 100),
-            selected);
+            selected,
+            QueryScope(request));
         var visible = new ConcurrentDictionary<uint, OutfitterMarketItemEvidence>();
         PublishState(signature, previous, visible.Values, new(
             OutfitterMarketDiscoveryStage.Cataloging,
@@ -147,7 +148,7 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
                 try
                 {
                     var bulk = await bulkSource.FetchListingsBulkAsync(
-                        request.Region,
+                        QueryScope(request),
                         fetch.Select(target => target.ItemId).ToArray(),
                         request.ListingLimit,
                         cancellationToken).ConfigureAwait(false);
@@ -300,7 +301,7 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
         try
         {
             var listings = await listingSource.FetchListingsAsync(
-                request.Region,
+                QueryScope(request),
                 target.ItemId,
                 Math.Clamp(request.ListingLimit, 1, 100),
                 cancellationToken).ConfigureAwait(false);
@@ -503,6 +504,10 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
             left.Coverage.CatalogItemCount != right.Coverage.CatalogItemCount ||
             left.Coverage.QueriedItemCount != right.Coverage.QueriedItemCount ||
             left.Coverage.ListingLimit != right.Coverage.ListingLimit ||
+            !string.Equals(
+                string.IsNullOrWhiteSpace(left.Coverage.QueryScope) ? left.Region : left.Coverage.QueryScope,
+                string.IsNullOrWhiteSpace(right.Coverage.QueryScope) ? right.Region : right.Coverage.QueryScope,
+                StringComparison.OrdinalIgnoreCase) ||
             !left.Coverage.QueriedItemIds.SequenceEqual(right.Coverage.QueriedItemIds) ||
             left.Items.Count != right.Items.Count)
             return false;
@@ -514,13 +519,14 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
 
     private static OutfitterMarketEvidenceCacheKey Key(OutfitterMarketEvidenceRequest request, uint itemId) => new(
         request.SourceKey.Trim(),
-        request.Region.Trim(),
+        QueryScope(request),
         itemId,
         Math.Clamp(request.ListingLimit, 1, 100));
 
     private static string Signature(OutfitterMarketEvidenceRequest request) => string.Join('|',
         request.SourceKey.Trim(),
         request.Region.Trim(),
+        QueryScope(request),
         Math.Clamp(request.ListingLimit, 1, 100),
         request.CoverageMode,
         request.SampleSize,
@@ -550,4 +556,7 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
                 throw new ArgumentException("Explicit sample item ids must belong to the requested catalog.", nameof(request));
         }
     }
+
+    private static string QueryScope(OutfitterMarketEvidenceRequest request) =>
+        string.IsNullOrWhiteSpace(request.QueryScope) ? request.Region.Trim() : request.QueryScope.Trim();
 }

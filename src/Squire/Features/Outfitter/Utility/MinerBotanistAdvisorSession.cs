@@ -61,6 +61,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 {
     private const int AdvisorMarketListingLimit = 20;
     private readonly IPlayerAdvisorBaselineSource baselineSource;
+    private readonly IDataManager dataManager;
     private readonly MinerBotanistAdvisorCatalog catalog;
     private readonly OutfitterMarketEvidenceDiscoveryService marketDiscovery;
     private readonly OutfitterMarketEvidenceFileStore marketEvidenceStore;
@@ -114,6 +115,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
     {
         this.baselineSource = baselineSource ?? throw new ArgumentNullException(nameof(baselineSource));
         ArgumentNullException.ThrowIfNull(dataManager);
+        this.dataManager = dataManager;
         ArgumentNullException.ThrowIfNull(listingSource);
         ArgumentException.ThrowIfNullOrWhiteSpace(evidencePath);
         this.craftDiscovery = craftDiscovery;
@@ -515,11 +517,13 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             StringComparison.Ordinal);
         var marketScope = AdvisorMarketScopeSelector.Select(offers);
         var sampledMarket = marketScope.Count < offers.MarketItemIds.Count;
+        var marketQueryScope = ResolveMarketQueryScope(baseline, Region);
         if (sampledMarket)
         {
             coverageLabel +=
                 $" Market discovery samples {marketScope.Count:N0} of {offers.MarketItemIds.Count:N0} eligible items, prioritizing the highest-level options across every equipment slot; owned and gil-vendor options remain complete.";
         }
+        coverageLabel += $" Market prices are scoped to {marketQueryScope}; the acquisition region remains {Region}.";
         discoveryRequest = new(
             "universalis",
             Region,
@@ -530,7 +534,8 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
                 : OutfitterMarketCoverageMode.ExhaustiveWithinScope,
             SampleSize: sampledMarket ? marketScope.Count : null,
             MaxConcurrency: 4,
-            SampleItemIds: sampledMarket ? marketScope : null);
+            SampleItemIds: sampledMarket ? marketScope : null,
+            QueryScope: marketQueryScope);
         discoveryTask = marketDiscovery.DiscoverAsync(discoveryRequest, cancellation!.Token);
         State = State with
         {
@@ -1040,6 +1045,24 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             $"Gearset {fingerprint.GearsetId + 1:N0}",
             job,
             gearset);
+    }
+
+    private string ResolveMarketQueryScope(PlayerAdvisorBaseline currentBaseline, string acquisitionRegion)
+    {
+        var currentWorldId = currentBaseline.EquipmentSnapshot?.Identity.CurrentWorldId ?? 0;
+        var worldName = dataManager.GetExcelSheet<Lumina.Excel.Sheets.World>()?
+            .GetRowOrDefault(currentWorldId)?
+            .Name.ToString();
+        if (string.IsNullOrWhiteSpace(worldName))
+            return acquisitionRegion;
+        try
+        {
+            return MarketAcquisitionWorldCatalog.ResolveDataCenter(worldName);
+        }
+        catch (InvalidOperationException)
+        {
+            return acquisitionRegion;
+        }
     }
 
     private static MinerBotanistAdvisorSessionState Idle(AdvisorUtilityContextDescriptor context) => new(

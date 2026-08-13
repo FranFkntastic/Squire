@@ -360,11 +360,15 @@ public sealed class OutfitterMarketEvidenceDiscoveryServiceTests
             OutfitterMarketCoverageMode.Sampled,
             SampleSize: 2,
             MaxConcurrency: 3,
-            SampleItemIds: [2, 5]);
+            SampleItemIds: [2, 5],
+            QueryScope: "Aether");
 
         var result = await service.DiscoverAsync(request, CancellationToken.None);
 
         Assert.Equal([2u, 5u], Assert.Single(source.BulkRequests));
+        Assert.Equal("Aether", Assert.Single(source.QueryScopes));
+        Assert.Equal("North America", result.WorkingBook.Region);
+        Assert.Equal("Aether", result.WorkingBook.Coverage.QueryScope);
         Assert.Equal(5, result.WorkingBook.Coverage.CatalogItemCount);
         Assert.Equal(2, result.WorkingBook.Coverage.QueriedItemCount);
         Assert.Equal([2u, 5u], result.WorkingBook.Coverage.QueriedItemIds);
@@ -464,6 +468,7 @@ public sealed class OutfitterMarketEvidenceDiscoveryServiceTests
     {
         public List<uint> SingleRequests { get; } = [];
         public List<uint[]> BulkRequests { get; } = [];
+        public List<string> QueryScopes { get; } = [];
 
         public Task<MarketAcquisitionBulkListingResult> FetchListingsBulkAsync(
             string region,
@@ -472,6 +477,7 @@ public sealed class OutfitterMarketEvidenceDiscoveryServiceTests
             CancellationToken cancellationToken)
         {
             var ids = itemIds.Order().ToArray();
+            QueryScopes.Add(region);
             BulkRequests.Add(ids);
             return Task.FromResult(new MarketAcquisitionBulkListingResult(
                 ids.ToDictionary(

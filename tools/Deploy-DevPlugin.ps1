@@ -19,7 +19,10 @@ if (-not $SkipBuild) {
     $arguments = @('build', $project, '-c', $Configuration)
     if (-not [string]::IsNullOrWhiteSpace($FranthropyRoot)) {
         $resolvedFranthropy = [System.IO.Path]::GetFullPath($FranthropyRoot)
-        $arguments += "-p:FranthropyDalamudProject=$(Join-Path $resolvedFranthropy 'src\Franthropy.Dalamud\Franthropy.Dalamud.csproj')"
+        $arguments += @(
+            "-p:FranthropyDalamudProject=$(Join-Path $resolvedFranthropy 'src\Franthropy.Dalamud\Franthropy.Dalamud.csproj')",
+            "-p:FranthropyFfxivProject=$(Join-Path $resolvedFranthropy 'src\Franthropy.FFXIV\Franthropy.FFXIV.csproj')"
+        )
     }
     if (-not [string]::IsNullOrWhiteSpace($CraftArchitectRoot)) {
         $resolvedCraftArchitect = [System.IO.Path]::GetFullPath($CraftArchitectRoot)

@@ -82,6 +82,7 @@ internal sealed class MinerBotanistAdvisorPanel
     private PortfolioAcquisitionTransfer? portfolioAcquisitionTransfer;
     private string? portfolioAcquisitionStatus;
     private bool portfolioAcquisitionCompositionFailed;
+    private bool showPortfolioConsequences;
     private DateTimeOffset nextEquipmentAfterObservationAtUtc;
     private bool portfolioRecoveryBuildRequested;
     private PortfolioAcquisitionRecoveryTriggerState portfolioRecoveryTrigger = PortfolioAcquisitionRecoveryTrigger.Empty;
@@ -689,27 +690,55 @@ internal sealed class MinerBotanistAdvisorPanel
         DalamudUiChrome.DrawCallout(
             "SquirePortfolioExact",
             "Every scarce item has one owner",
-            $"{plan.SelectedCandidates.Count:N0} target recommendation{(plan.SelectedCandidates.Count == 1 ? string.Empty : "s")} fit the current exact allocation. {plan.AllocationConsequences.Count:N0} lower-priority conflict{(plan.AllocationConsequences.Count == 1 ? string.Empty : "s")} remain visible.",
+            $"{plan.SelectedCandidates.Count:N0} target recommendation{(plan.SelectedCandidates.Count == 1 ? string.Empty : "s")} fit the current exact allocation. {plan.AllocationConsequences.Count:N0} lower-priority conflict{(plan.AllocationConsequences.Count == 1 ? string.Empty : "s")} remain reviewable.",
             SquireUiTheme.Current,
             DalamudUiTone.Success);
         if (ImGui.BeginTable("##SquirePortfolioAllocation", 4, ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingStretchProp))
         {
             ImGui.TableSetupColumn("Target", ImGuiTableColumnFlags.WidthStretch, 0.8f);
-            ImGui.TableSetupColumn("Selected upgrade", ImGuiTableColumnFlags.WidthStretch, 1.5f);
-            ImGui.TableSetupColumn("Exact allocation", ImGuiTableColumnFlags.WidthStretch, 1f);
+            ImGui.TableSetupColumn("Selected changes", ImGuiTableColumnFlags.WidthStretch, 1.5f);
+            ImGui.TableSetupColumn("Source mix", ImGuiTableColumnFlags.WidthStretch, 1f);
             ImGui.TableSetupColumn("State", ImGuiTableColumnFlags.WidthFixed, 82f);
             ImGui.TableHeadersRow();
             foreach (var candidate in plan.SelectedCandidates)
                 DrawPortfolioAllocationRow(candidate);
-            foreach (var consequence in plan.AllocationConsequences)
-                DrawPortfolioConsequenceRow(consequence);
+            if (showPortfolioConsequences)
+            {
+                var targetLabels = plan.OrderedTargets.ToDictionary(value => value.TargetKey, value => value.TargetLabel, StringComparer.Ordinal);
+                foreach (var consequence in plan.AllocationConsequences)
+                    DrawPortfolioConsequenceRow(consequence, targetLabels);
+            }
             ImGui.EndTable();
         }
+        DrawPortfolioConsequenceDisclosure(plan.AllocationConsequences.Count);
         if (!hasActiveExecution)
         {
             DrawPortfolioAcquisition(plan);
             DrawPortfolioEquipmentExecution(plan);
         }
+    }
+
+    private void DrawPortfolioConsequenceDisclosure(int count)
+    {
+        var presentation = PortfolioConsequenceDisclosurePresentationResolver.Resolve(count, showPortfolioConsequences);
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, presentation.Summary);
+        if (count == 0)
+            return;
+        void Toggle() => showPortfolioConsequences = !showPortfolioConsequences;
+        if (DalamudUiControls.Button(
+                $"{presentation.ActionLabel}##SquirePortfolioConsequencesToggle",
+                SquireUiTheme.Current,
+                DalamudUiTone.Neutral,
+                quiet: true))
+            Toggle();
+        RegisterLastControl(
+            PortfolioPresentationReviewedControlIds.ConsequencesToggle,
+            showPortfolioConsequences ? "Hide lower-priority allocation alternatives" : "Show lower-priority allocation alternatives",
+            AgentBridgeUiControlKind.Toggle,
+            true,
+            showPortfolioConsequences,
+            count.ToString(),
+            Toggle);
     }
 
     private void DrawPortfolioRecoveryControls()
@@ -1755,49 +1784,31 @@ internal sealed class MinerBotanistAdvisorPanel
     private void DrawPortfolioAllocationRow(PortfolioCandidate candidate)
     {
         var evaluated = portfolioEvidence[candidate.TargetKey];
-        var selected = evaluated.Advice.Frontier?.Pareto.Frontier.SingleOrDefault(solution =>
-            string.Equals(solution.Candidate.SolutionId, candidate.CandidateKey, StringComparison.Ordinal));
-        var replacements = selected?.Candidate.Selections.Select(selection =>
-            evaluated.Advice.OffersByAllocation.TryGetValue(selection.AllocationKey, out var offer)
-                ? $"{selection.Position}: {offer.Offer.Definition.Name} {(offer.Offer.ResolvedQuality == EquipmentQuality.High ? "HQ" : "NQ")}"
-                : $"{selection.Position}: unresolved exact allocation").ToArray() ?? [candidate.CandidateKey];
         string ItemLabel(uint itemId) => evaluated.Advice.OffersByAllocation.Values
             .FirstOrDefault(offer => offer.Offer.Definition.ItemId == itemId)?.Offer.Definition.Name ?? "Exact observed item";
-        var allocation = candidate.Demands.Count == 0
-            ? "Vendor or craft capacity"
-            : string.Join("\n", candidate.Demands.Select(demand =>
-                AllocationLabel(demand.Allocation, demand.Quantity, ItemLabel(demand.Allocation.ItemId))));
-        if (candidate.HandMeDowns.Count > 0)
-            allocation += "\n" + string.Join("\n", candidate.HandMeDowns.Select(handMeDown =>
-            {
-                var consumers = portfolioAuthority?.HandMeDownChain.Where(value =>
-                    string.Equals(value.UpstreamTargetKey, candidate.TargetKey, StringComparison.Ordinal) &&
-                    value.Allocation == handMeDown.ReleasedAllocation)
-                    .Select(value => value.DownstreamTargetKey)
-                    .ToArray() ?? [];
-                return $"{candidate.TargetKey} → {(consumers.Length == 0 ? "unallocated" : string.Join(", ", consumers))}: " +
-                       $"{ItemLabel(handMeDown.ReleasedItem.ItemId)} {(handMeDown.ReleasedItem.IsHighQuality ? "HQ" : "NQ")} from {handMeDown.Position}";
-            }));
+        var presentationConsumers = candidate.HandMeDowns.ToDictionary(
+            value => value.ReleasedAllocation,
+            value => (IReadOnlyList<string>)(portfolioAuthority?.HandMeDownChain.Where(link =>
+                    string.Equals(link.UpstreamTargetKey, candidate.TargetKey, StringComparison.Ordinal) &&
+                    link.Allocation == value.ReleasedAllocation)
+                .Select(link => portfolioEvidence.TryGetValue(link.DownstreamTargetKey, out var downstream)
+                    ? downstream.TargetLabel
+                    : "Downstream target")
+                .ToArray() ?? []));
+        var baseline = evaluated.Advice.Baseline?.EquippedSlots.ToDictionary(
+            value => value.Position,
+            value => value.Instance is { } instance && value.Quality is { } quality
+                ? new PortfolioExactItem(
+                    instance.Fingerprint.ItemId,
+                    quality == EquipmentQuality.High,
+                    ExactFingerprintInstanceId(instance.Fingerprint))
+                : null) ?? new Dictionary<EquipmentLoadoutPosition, PortfolioExactItem?>();
+        var presentation = PortfolioAllocationPresentationResolver.Resolve(candidate, baseline, ItemLabel, presentationConsumers);
         ImGui.TableNextRow();
         ImGui.TableNextColumn(); ImGui.TextUnformatted(evaluated.TargetLabel);
-        ImGui.TableNextColumn(); ImGui.TextColored(MarketMafiosoUiTheme.Header, string.Join("\n", replacements));
-        ImGui.TableNextColumn(); ImGui.TextWrapped(allocation);
+        ImGui.TableNextColumn(); ImGui.TextColored(MarketMafiosoUiTheme.Header, presentation.SelectedUpgradeText);
+        ImGui.TableNextColumn(); ImGui.TextWrapped(presentation.ExactAllocationText);
         ImGui.TableNextColumn(); ImGui.TextColored(MarketMafiosoUiTheme.Success, "Allocated");
-    }
-
-    private static string AllocationLabel(PortfolioAllocationKey allocation, uint quantity, string itemName)
-    {
-        var quality = allocation.IsHighQuality ? "HQ" : "NQ";
-        var source = allocation.SourceKind switch
-        {
-            PortfolioAllocationSourceKind.OwnedInstance when allocation.InstanceId is { } instanceId =>
-                TryParseEquipmentInstanceAddress(instanceId, out var address)
-                    ? $"{address.Container} slot {address.SlotIndex + 1:N0}"
-                    : allocation.SourceKey,
-            PortfolioAllocationSourceKind.MarketListing => $"listing {allocation.SourceKey}",
-            _ => allocation.SourceKey,
-        };
-        return $"{itemName} {quality} ×{quantity:N0} · {source}";
     }
 
     private void DrawPortfolioAcquisition(OutfitterPortfolioPlan plan)
@@ -2250,12 +2261,15 @@ internal sealed class MinerBotanistAdvisorPanel
         }
     }
 
-    private static void DrawPortfolioConsequenceRow(PortfolioAllocationConsequence consequence)
+    private void DrawPortfolioConsequenceRow(
+        PortfolioAllocationConsequence consequence,
+        IReadOnlyDictionary<string, string> targetLabels)
     {
+        var presentation = PortfolioConsequencePresentationResolver.Resolve(consequence, targetLabels, PortfolioItemLabel);
         ImGui.TableNextRow();
-        ImGui.TableNextColumn(); ImGui.TextUnformatted(consequence.LosingTargetKey);
-        ImGui.TableNextColumn(); ImGui.TextColored(MarketMafiosoUiTheme.Warning, consequence.LosingCandidateKey);
-        ImGui.TableNextColumn(); ImGui.TextWrapped(consequence.Reason);
+        ImGui.TableNextColumn(); ImGui.TextUnformatted(presentation.LosingTargetLabel);
+        ImGui.TableNextColumn(); ImGui.TextColored(MarketMafiosoUiTheme.Warning, presentation.ConflictSummary);
+        ImGui.TableNextColumn(); ImGui.TextWrapped(presentation.WinnerSummary);
         ImGui.TableNextColumn(); ImGui.TextColored(MarketMafiosoUiTheme.Warning, "Deferred");
     }
 

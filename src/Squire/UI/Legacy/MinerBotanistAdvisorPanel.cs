@@ -1853,6 +1853,10 @@ internal sealed class MinerBotanistAdvisorPanel
         var vendorCount = transfer.VendorActions.Count;
         var craftCount = transfer.ArtisanRecipes.Select(value => (value.TargetKey, value.CandidateKey)).Distinct().Count();
         var hasMarketLots = marketCount > 0;
+        var targetLabels = PortfolioPriorities().ToDictionary(
+            value => value.TargetKey,
+            value => value.TargetLabel,
+            StringComparer.Ordinal);
         ImGui.TextWrapped($"Market review: {marketCount:N0} / Vendor actions: {vendorCount:N0} / Craft handoffs: {craftCount:N0}. The Market Workbench reviews exact market lots only; vendor purchases and crafting remain separate explicit actions.");
         if (ImGui.BeginTable(
                 "##SquirePortfolioAcquisitionLines",
@@ -1868,9 +1872,9 @@ internal sealed class MinerBotanistAdvisorPanel
             {
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted(line.TargetKey);
+                ImGui.TextUnformatted(targetLabels.GetValueOrDefault(line.TargetKey) ?? "Portfolio target");
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted($"{line.Priority:N0} / {line.ProgressionHorizon}");
+                ImGui.TextUnformatted($"{line.Priority:N0}");
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted($"{line.ItemName} {(line.Allocation.IsHighQuality ? "HQ" : "NQ")} x{line.Quantity:N0}");
                 ImGui.TableNextColumn();

@@ -1202,12 +1202,22 @@ internal sealed class MinerBotanistAdvisorPanel
         ImGui.TableNextColumn();
         var target = (targets ?? []).SingleOrDefault(value => value.Key == priority.TargetKey);
         var evidenceReady = portfolioEvidence.ContainsKey(priority.TargetKey);
-        var evaluationDiagnostic = portfolioTargetDiagnostics.GetValueOrDefault(priority.TargetKey);
+        var terminal = portfolioTerminalEvidence.GetValueOrDefault(priority.TargetKey);
+        var evaluationDiagnostic = portfolioTargetDiagnostics.GetValueOrDefault(priority.TargetKey) ?? terminal?.Reason;
+        var evidenceLabel = evidenceReady
+            ? "Exact frontier ready"
+            : terminal?.Kind switch
+            {
+                PortfolioTargetDispositionKind.TerminalNoUpgrade => "No upgrade found",
+                PortfolioTargetDispositionKind.TerminalAbstention => "Abstained",
+                _ when evaluationDiagnostic is not null => "Stopped safely",
+                _ when target is { IsReady: false } => "Needs evidence",
+                _ => "Not evaluated",
+            };
         ImGui.TextColored(
             evidenceReady ? MarketMafiosoUiTheme.Success :
             target is { IsReady: false } || evaluationDiagnostic is not null ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Muted,
-            evidenceReady ? "Exact frontier ready" : evaluationDiagnostic is not null ? "Abstained" :
-                target is { IsReady: false } ? "Needs evidence" : "Not evaluated");
+            evidenceLabel);
         var diagnostic = evaluationDiagnostic ?? (target is { IsReady: false } ? target.Diagnostic : null);
         if (ImGui.IsItemHovered() && !string.IsNullOrWhiteSpace(diagnostic))
             ImGui.SetTooltip(diagnostic);

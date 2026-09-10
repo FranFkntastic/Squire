@@ -36,12 +36,14 @@ internal sealed class MinerBotanistAdvisorPanel
     private AdvisorFrontierPresentation? frontierPresentation;
     private AdvisorFrontierWindow? frontierWindow;
     private ParetoFrontierPlotModel? frontierPlot;
+    private long frontierPlotRevision;
     private HashSet<string> frontierWarningIds = new(StringComparer.Ordinal);
     private IReadOnlyList<AdvisorAdjacentTradeoff> adjacentTradeoffs = [];
     private string? selectedSolutionId;
     private string? handoffStatus;
     private AdvisorFrontierView frontierView = AdvisorFrontierView.Solutions;
 #if DEBUG
+    private long syntheticPlotRevision;
     private static readonly MinerBotanistAdvisorSyntheticScenarioKind[] SyntheticScenarioOrder =
     [
         MinerBotanistAdvisorSyntheticScenarioKind.Success,
@@ -590,6 +592,7 @@ internal sealed class MinerBotanistAdvisorPanel
         selectedSolutionId = solutionId;
         frontierWindow = frontierPresentation.WindowAround(solutionId);
         frontierPlot = plotBuilder.Build(frontierWindow.ToPlotResult(), "squire-advisor-frontier-window");
+        frontierPlotRevision++;
         frontierWarningIds = frontierWindow.Solutions
             .Where(value => advice.AuthorityBySolutionId.TryGetValue(value.Candidate.SolutionId, out var authority) &&
                 !authority.AdvisorMayConsider)
@@ -686,7 +689,7 @@ internal sealed class MinerBotanistAdvisorPanel
             advice.Nomination?.Candidate.SolutionId,
             frontierWarningIds,
             new HashSet<string>(StringComparer.Ordinal));
-        var result = plotContainer.Draw("SquireAdvisorFrontier", model.Spec, new Vector2(0, 285f), interaction);
+        var result = plotContainer.Draw("SquireAdvisorFrontier", frontierPlotRevision, model.Spec, new Vector2(0, 285f), interaction);
         RegisterPlotControls(result.Controls);
         if (result.ClickedDatumId is { } clicked && model.SolutionsByDatumId.ContainsKey(clicked))
             SelectSolution(advice, clicked);
@@ -739,7 +742,8 @@ internal sealed class MinerBotanistAdvisorPanel
             new HashSet<string>(StringComparer.Ordinal));
 
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Shape identifies context · point color remains NQ/HQ mix");
-        var result = plotContainer.Draw("SquireAdvisorFrontierOverlay", overlay.Spec, new Vector2(0, 285f), interaction);
+        // Debug overlays are reconstructed above, so each generated model needs a fresh revision.
+        var result = plotContainer.Draw("SquireAdvisorFrontierOverlay", ++syntheticPlotRevision, overlay.Spec, new Vector2(0, 285f), interaction);
         RegisterPlotControls(result.Controls);
         if (result.ClickedDatumId is { } clicked && overlay.DatumIdentities.TryGetValue(clicked, out var clickedIdentity))
         {

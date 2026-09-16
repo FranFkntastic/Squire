@@ -138,8 +138,18 @@ public static class SavedGearsetTargetResolver
         }).ToArray();
         var fingerprint = CreateFingerprint(character, gearset, job.Level, fingerprintSlots);
 
+        var referenceDiagnostics = byPosition
+            .ToDictionary(value => value.Key, value => ValidateReference(value.Value));
+        var candidatesByPosition = byPosition
+            .Where(value => referenceDiagnostics[value.Key] is null)
+            .ToDictionary(
+                value => value.Key,
+                value => OrderCandidates(snapshot.Instances
+                    .Where(instance => InstanceMatches(instance, value.Value)), value.Value)
+                    .ToArray());
+        var assignments = AssignDistinctInstances(candidatesByPosition);
+
         var slots = new List<SavedGearsetSlotResolution>(CanonicalPositions.Length);
-        var usedInstances = new HashSet<EquipmentInstanceFingerprint>(EquipmentInstanceFingerprintComparer.Instance);
         foreach (var position in CanonicalPositions)
         {
             if (!byPosition.TryGetValue(position, out var reference))
@@ -148,39 +158,23 @@ public static class SavedGearsetTargetResolver
                 continue;
             }
 
-            var referenceDiagnostic = ValidateReference(reference);
+            var referenceDiagnostic = referenceDiagnostics[position];
             if (referenceDiagnostic is not null)
             {
                 slots.Add(new(position, reference, null, null, referenceDiagnostic));
                 continue;
             }
 
-            var candidates = snapshot.Instances
-                .Where(instance => InstanceMatches(instance, reference))
-                .ToArray();
-            if (candidates.Length > 1 && reference.Stains is not null)
+            if (!assignments.TryGetValue(position, out var instance))
             {
-                var appearanceMatches = candidates.Where(instance =>
-                    instance.Fingerprint.GlamourId == reference.GlamourId &&
-                    instance.Fingerprint.Stains.SequenceEqual(reference.Stains)).ToArray();
-                if (appearanceMatches.Length == 1)
-                    candidates = appearanceMatches;
-            }
-            if (candidates.Length != 1)
-            {
-                var reason = candidates.Length == 0 ? "is not present in equipped or armoury inventory" : "matches multiple owned instances";
+                var reason = candidatesByPosition[position].Length == 0
+                    ? "is not present in equipped or armoury inventory"
+                    : "does not have a distinct owned copy available for this slot";
                 slots.Add(new(position, reference, null, null,
                     $"{PositionKey(position)} item {reference.ItemId} {reason}."));
                 continue;
             }
 
-            var instance = candidates[0];
-            if (!usedInstances.Add(instance.Fingerprint))
-            {
-                slots.Add(new(position, reference, null, null,
-                    $"{PositionKey(position)} resolves to an instance already assigned to another saved-gearset slot."));
-                continue;
-            }
             if (!snapshot.Definitions.TryGetValue(reference.ItemId, out var definition))
             {
                 slots.Add(new(position, reference, instance, null,
@@ -228,6 +222,55 @@ public static class SavedGearsetTargetResolver
             fingerprint.IsHighQuality == reference.IsHighQuality &&
             fingerprint.MateriaIds.SequenceEqual(reference.MateriaIds!) &&
             (fingerprint.MateriaGrades ?? []).SequenceEqual(reference.MateriaGrades!);
+    }
+
+    private static EquipmentInstanceSnapshot[] OrderCandidates(
+        IEnumerable<EquipmentInstanceSnapshot> candidates,
+        GearsetItemReference reference) =>
+        candidates
+            .OrderByDescending(instance => AppearanceMatches(instance, reference))
+            .ThenBy(instance => instance.Fingerprint.Container, StringComparer.Ordinal)
+            .ThenBy(instance => instance.Fingerprint.SlotIndex)
+            .ToArray();
+
+    private static bool AppearanceMatches(EquipmentInstanceSnapshot instance, GearsetItemReference reference) =>
+        reference.Stains is not null &&
+        instance.Fingerprint.GlamourId == reference.GlamourId &&
+        instance.Fingerprint.Stains.SequenceEqual(reference.Stains);
+
+    private static IReadOnlyDictionary<EquipmentLoadoutPosition, EquipmentInstanceSnapshot> AssignDistinctInstances(
+        IReadOnlyDictionary<EquipmentLoadoutPosition, EquipmentInstanceSnapshot[]> candidatesByPosition)
+    {
+        var positionByInstance = new Dictionary<EquipmentInstanceFingerprint, EquipmentLoadoutPosition>(
+            EquipmentInstanceFingerprintComparer.Instance);
+        var instanceByPosition = new Dictionary<EquipmentLoadoutPosition, EquipmentInstanceSnapshot>();
+
+        foreach (var position in CanonicalPositions.Where(candidatesByPosition.ContainsKey))
+            TryAssign(position, new HashSet<EquipmentInstanceFingerprint>(EquipmentInstanceFingerprintComparer.Instance));
+
+        return instanceByPosition;
+
+        bool TryAssign(
+            EquipmentLoadoutPosition position,
+            HashSet<EquipmentInstanceFingerprint> visitedInstances)
+        {
+            foreach (var candidate in candidatesByPosition[position])
+            {
+                if (!visitedInstances.Add(candidate.Fingerprint))
+                    continue;
+                if (positionByInstance.TryGetValue(candidate.Fingerprint, out var previousPosition) &&
+                    !TryAssign(previousPosition, visitedInstances))
+                {
+                    continue;
+                }
+
+                positionByInstance[candidate.Fingerprint] = position;
+                instanceByPosition[position] = candidate;
+                return true;
+            }
+
+            return false;
+        }
     }
 
     private static bool IsGearsetContainer(string container) =>

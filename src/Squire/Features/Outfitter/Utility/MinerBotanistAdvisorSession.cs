@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
@@ -73,6 +74,12 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
     private CancellationTokenSource? cancellation;
     private Task<OutfitterMarketDiscoveryResult>? discoveryTask;
     private OutfitterMarketEvidenceRequest? discoveryRequest;
+    private Task<OutfitterPersistedAnalysisBook>? persistedAnalysisLoadTask;
+    private Task<OutfitterMarketEvidenceBook?>? persistedMarketEvidenceLoadTask;
+    private Task<OutfitterPersistedAnalysis>? persistenceTask;
+    private OutfitterPersistedAnalysis? restoredAnalysis;
+    private Guid? currentAnalysisId;
+    private bool cacheRestoreAttempted;
     private PlayerAdvisorBaseline? baseline;
     private IAdvisorStatFamily? resolvedFamily;
     private MinerBotanistAdvisorCatalogResult? offers;
@@ -122,7 +129,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         solverReplayPath = Path.Combine(Path.GetDirectoryName(evidencePath)!, "outfitter-solver-replay.json");
 #endif
         marketEvidenceStore = new(evidencePath);
-        persistedAnalysisStore = new(Path.Combine(Path.GetDirectoryName(evidencePath)!, "outfitter-analyses.json"));
+        persistedAnalysisStore = new(Path.Combine(Path.GetDirectoryName(evidencePath)!, "outfitter-analyses.cache"));
         marketDiscovery = new(
             listingSource,
             new(TimeSpan.FromMinutes(15), TimeSpan.FromHours(6), maxEntries: 4096),
@@ -133,6 +140,10 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
     public MinerBotanistAdvisorSessionState State { get; private set; }
 
     public OutfitterMarketEvidenceBook? CurrentEvidence { get; private set; }
+
+    public PlayerAdvisorBaseline? CurrentBaseline => baseline;
+
+    public string? AdviceTargetKey => adviceTargetKey;
 
     public string Region { get; private set; } = "North America";
 
@@ -323,6 +334,8 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             : State.CoverageLabel;
         cancellation = new();
         ResetPendingCapture();
+        persistedAnalysisLoadTask = persistedAnalysisStore.LoadAsync(cancellation.Token);
+        persistedMarketEvidenceLoadTask = marketEvidenceStore.LoadAsync(cancellation.Token);
         State = new(
             MinerBotanistAdvisorSessionStage.CapturingPlayer,
             "Capturing current player stats, equipped items, quality, and materia on the next framework tick.",
@@ -338,6 +351,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 
     public void Tick()
     {
+        TickPersistence();
         if (!State.IsBusy)
             return;
         try
@@ -529,10 +543,60 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             Total = offers.MarketItemIds.Count,
             UpdatedAtUtc = DateTimeOffset.UtcNow,
         };
+        TryRestoreCachedAdvice();
+    }
+
+    private void TryRestoreCachedAdvice()
+    {
+        if (cacheRestoreAttempted || baseline is null || resolvedFamily is null ||
+            persistedAnalysisLoadTask is not { IsCompleted: true } analysisTask ||
+            persistedMarketEvidenceLoadTask is not { IsCompleted: true } evidenceTask)
+        {
+            return;
+        }
+
+        cacheRestoreAttempted = true;
+        try
+        {
+            var book = analysisTask.GetAwaiter().GetResult();
+            var evidence = evidenceTask.GetAwaiter().GetResult();
+            if (evidence is null || discoveryRequest is null || !evidence.Matches(discoveryRequest) ||
+                !OutfitterPersistedAnalysisCache.TryRestore(
+                    book,
+                    baseline,
+                    resolvedFamily,
+                    State.Context,
+                    evidence,
+                    out var analysis,
+                    out var advice))
+            {
+                return;
+            }
+
+            restoredAnalysis = analysis;
+            currentAnalysisId = analysis.AnalysisId;
+            CurrentEvidence = evidence;
+            adviceTargetKey = requestedTarget?.Key ?? "active-loadout";
+            State = State with
+            {
+                Message = "Saved evaluation loaded; checking current market prices.",
+                Advice = advice,
+                AdviceIsRetained = true,
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+            };
+        }
+        catch (Exception exception) when (exception is IOException or InvalidDataException or InvalidOperationException or JsonException)
+        {
+            restoredAnalysis = null;
+            currentAnalysisId = null;
+        }
     }
 
     private void TickMarket()
     {
+        TryRestoreCachedAdvice();
+        if (!cacheRestoreAttempted)
+            return;
         if (craftDiscoveryOperation is not null)
         {
             TickCraftDiscovery();
@@ -564,6 +628,36 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         var currentEvidence = MinerBotanistAdvisorSessionEvidencePolicy.SelectCurrent(result, discoveryRequest!);
         discoveryTask = null;
         discoveryRequest = null;
+        if (pendingCraftPreparation is null &&
+            restoredAnalysis is { } cachedAnalysis &&
+            State is { AdviceIsRetained: true, Advice: { } cachedAdvice } &&
+            result is { PublishedChanged: false, PreviousPublishedBook: { } previousEvidence } &&
+            currentEvidence is not null &&
+            OutfitterPersistedAnalysisCache.MatchesEvidence(cachedAnalysis, previousEvidence) &&
+            OutfitterPersistedAnalysisCache.TryRebindEquivalentMarketEvidence(
+                cachedAdvice,
+                previousEvidence,
+                currentEvidence,
+                out var reboundAdvice))
+        {
+            advicePlayerFingerprint = PlayerAdvisorAuthorityFingerprint.Capture(baseline!);
+            CurrentEvidence = currentEvidence;
+            adviceTargetKey = requestedTarget?.Key ?? "active-loadout";
+            restoredAnalysis = null;
+            State = State with
+            {
+                Stage = MinerBotanistAdvisorSessionStage.Complete,
+                Message = reboundAdvice.Diagnostic,
+                Advice = reboundAdvice,
+                AdviceIsRetained = false,
+                Completed = currentEvidence.Coverage.QueriedItemCount,
+                Total = currentEvidence.Coverage.QueriedItemCount,
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+            };
+            StartPersistence();
+            DisposeCancellation();
+            return;
+        }
         if (pendingCraftPreparation is { } preparation)
         {
             if (currentEvidence is null)
@@ -842,6 +936,8 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         pendingCraftDiagnostic = null;
         pendingCraftPreparation = null;
         Volatile.Write(ref solverProgress, null);
+        if (stage == MinerBotanistAdvisorSessionStage.Complete)
+            StartPersistence();
         DisposeCancellation();
     }
 
@@ -887,6 +983,39 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         DisposeCancellation();
     }
 
+    private void StartPersistence()
+    {
+        TickPersistence();
+        if (persistenceTask is not null)
+            return;
+        try
+        {
+            persistenceTask = PersistCurrentAnalysisAsync(existingAnalysisId: currentAnalysisId);
+        }
+        catch (InvalidOperationException)
+        {
+            persistenceTask = null;
+        }
+    }
+
+    private void TickPersistence()
+    {
+        if (persistenceTask is not { IsCompleted: true } completed)
+            return;
+        try
+        {
+            _ = completed.GetAwaiter().GetResult();
+        }
+        catch (Exception exception) when (exception is IOException or InvalidDataException or InvalidOperationException or JsonException)
+        {
+            // Cache persistence is opportunistic; current advice remains authoritative in memory.
+        }
+        finally
+        {
+            persistenceTask = null;
+        }
+    }
+
     private void Abstain(string message)
     {
         State = State with
@@ -928,6 +1057,11 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
     {
         discoveryTask = null;
         discoveryRequest = null;
+        persistedAnalysisLoadTask = null;
+        persistedMarketEvidenceLoadTask = null;
+        restoredAnalysis = null;
+        currentAnalysisId = null;
+        cacheRestoreAttempted = false;
         InvalidateCraftDiscovery();
         baseline = null;
         resolvedFamily = null;

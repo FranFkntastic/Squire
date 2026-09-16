@@ -16,6 +16,7 @@ using MarketMafioso.Diagnostics;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Squire;
 using MarketMafioso.Squire.Observation;
+using MarketMafioso.Squire.Outfitter;
 using MarketMafioso.Windows.Squire;
 
 namespace Squire;
@@ -143,6 +144,8 @@ public sealed class Plugin : IDalamudPlugin
             DataManager,
             listingSource,
             new DalamudPlayerAdvisorBaselineSource(snapshotSource, PlayerState, DataManager),
+            new AutoRetainerOutfitterMetadataSource(pluginInterface, Log),
+            () => PlayerState.ClassJob.RowId,
             () => configuration.ActiveMarketAcquisitionRequestDocument?.Region
                   ?? configuration.ActiveMarketAcquisitionClaim?.Region
                   ?? "North America");
@@ -185,7 +188,7 @@ public sealed class Plugin : IDalamudPlugin
         ECommonsMain.Dispose();
     }
 
-    private void OpenWindow() => window.IsOpen = true;
+    private void OpenWindow() => window.OpenExpanded();
 
     private void HandleCommand(string arguments)
     {

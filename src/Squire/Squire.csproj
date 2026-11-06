@@ -15,13 +15,13 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
-    <FranthropyDalamudProject Condition="'$(FranthropyDalamudProject)' == ''">..\..\..\Franthropy\src\Franthropy.Dalamud\Franthropy.Dalamud.csproj</FranthropyDalamudProject>
     <CraftArchitectCoreProject Condition="'$(CraftArchitectCoreProject)' == ''">..\..\..\FFXIV Craft Architect C# Edition\src\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj</CraftArchitectCoreProject>
     <ShouldUnsetParentConfigurationAndPlatform>false</ShouldUnsetParentConfigurationAndPlatform>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="$(FranthropyDalamudProject)" SetConfiguration="Configuration=$(Configuration)" />
+    <PackageReference Include="Franthropy.Dalamud" Version="[$(FranthropyPackageVersion)]" Condition="'$(FranthropySource)' == 'Package'" />
+    <ProjectReference Include="$(FranthropyRoot)/src/Franthropy.Dalamud/Franthropy.Dalamud.csproj" Condition="'$(FranthropySource)' == 'Local'" />
     <ProjectReference Include="$(CraftArchitectCoreProject)" SetConfiguration="Configuration=$(Configuration)" />
     <InternalsVisibleTo Include="Squire.Tests" />
   </ItemGroup>
@@ -36,22 +36,7 @@
     <Compile Remove="Compatibility\Windows\MarketAcquisitionRequestBuilder\RequestPricingFormatter.cs" />
   </ItemGroup>
 
-  <Target Name="ValidateFranthropyProject" BeforeTargets="PrepareForBuild">
-    <Error Condition="!Exists('$(FranthropyDalamudProject)')" Text="Franthropy.Dalamud was not found at '$(FranthropyDalamudProject)'. Clone Franthropy beside Squire or set FranthropyDalamudProject." />
-  </Target>
 
-  <Target Name="ValidateFranthropyPin" BeforeTargets="PrepareForBuild"
-          Condition="Exists('$(MSBuildProjectDirectory)\..\..\eng\franthropy.ref') and '$(FranthropyAllowUnpinned)' != 'true'">
-    <PropertyGroup>
-      <FranthropyRepoRoot>$([System.IO.Path]::GetFullPath('$(FranthropyDalamudProject)\..\..\..'))</FranthropyRepoRoot>
-      <FranthropyPinnedRevision>$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\..\..\eng\franthropy.ref').Trim())</FranthropyPinnedRevision>
-    </PropertyGroup>
-    <Exec Command="git -C &quot;$(FranthropyRepoRoot)&quot; rev-parse HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="Low">
-      <Output TaskParameter="ConsoleOutput" ItemName="_FranthropyHead" />
-    </Exec>
-    <Error Condition="'@(_FranthropyHead)' != '' and '@(_FranthropyHead)' != '$(FranthropyPinnedRevision)'"
-           Text="Franthropy checkout at '$(FranthropyRepoRoot)' is at @(_FranthropyHead) but Squire pins $(FranthropyPinnedRevision) in eng/franthropy.ref. Update the pin deliberately or build with -p:FranthropyAllowUnpinned=true." />
-  </Target>
 
   <Target Name="ValidateCraftArchitectProject" BeforeTargets="PrepareForBuild">
     <Error Condition="!Exists('$(CraftArchitectCoreProject)')" Text="Craft Architect Core was not found at '$(CraftArchitectCoreProject)'. Clone it beside Squire or set CraftArchitectCoreProject." />

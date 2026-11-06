@@ -4,7 +4,8 @@ param(
     [string] $Configuration = "Release",
     [string] $PackageUrl = "",
     [string] $OutputDirectory = "",
-    [switch] $SkipBuild
+    [switch] $SkipBuild,
+    [string] $CraftArchitectCoreProject = ''
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,7 +26,9 @@ $packageStaging = Join-Path $outputDirectoryFull "package"
 $zipPath = Join-Path $outputDirectoryFull "latest.zip"
 $repoJsonPath = Join-Path $outputDirectoryFull "repo.json"
 if (-not $SkipBuild) {
-    dotnet build $projectPath -c $Configuration -p:UseSharedCompilation=false
+    $buildArguments = @('build', $projectPath, '-c', $Configuration, '-p:UseSharedCompilation=false')
+    if ($CraftArchitectCoreProject) { $buildArguments += "-p:CraftArchitectCoreProject=$CraftArchitectCoreProject" }
+    dotnet @buildArguments
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 

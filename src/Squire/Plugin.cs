@@ -74,7 +74,7 @@ public sealed class Plugin : IDalamudPlugin
                 PluginConfigDirectory = configDirectory,
                 PluginName = "Squire",
                 PluginInstanceId = Guid.NewGuid().ToString("N"),
-                GameBuild = Franthropy.Dalamud.Diagnostics.GamePatchCompatibilityGate.ReadCurrentGameVersion(),
+                GameBuild = Franthropy.Dalamud.Diagnostics.GameClientVersion.ReadCurrentGameVersion(),
                 GameInventory = GameInventory,
                 PlayerState = PlayerState,
                 AddonLifecycle = AddonLifecycle,

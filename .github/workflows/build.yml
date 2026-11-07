@@ -33,7 +33,7 @@ jobs:
             git -C $path checkout --detach FETCH_HEAD
             if ($LASTEXITCODE -or (git -C $path rev-parse HEAD) -ne $dependency[1]) { throw 'Dependency identity mismatch' }
           }
-          $dalamud = Join-Path $env:GITHUB_WORKSPACE 'artifacts/dalamud'
+          $dalamud = Join-Path $env:GITHUB_WORKSPACE 'artifacts/build-references/XIVLauncher/addon/Hooks/dev'
           Invoke-WebRequest https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile artifacts/dalamud.zip
           Expand-Archive artifacts/dalamud.zip $dalamud
           "DALAMUD_HOME=$dalamud" >> $env:GITHUB_ENV
@@ -41,6 +41,6 @@ jobs:
           "FranthropyRoot=$env:GITHUB_WORKSPACE/artifacts/dependencies/Franthropy" >> $env:GITHUB_ENV
           "CraftArchitectCoreProject=$env:GITHUB_WORKSPACE/artifacts/dependencies/XIV-Craft-Architect/src/FFXIV Craft Architect.Core/FFXIV Craft Architect.Core.csproj" >> $env:GITHUB_ENV
       - name: Build against exact source pins without a local feed
-        run: dotnet build Squire.slnx -c Release -p:ShouldUnsetParentConfigurationAndPlatform=false
+        run: dotnet build Squire.slnx -c Release -p:ShouldUnsetParentConfigurationAndPlatform=false "-p:AppData=$env:GITHUB_WORKSPACE/artifacts/build-references"
       - name: Test
         run: dotnet test tests/Squire.Tests/Squire.Tests.csproj -c Release --no-build --no-restore

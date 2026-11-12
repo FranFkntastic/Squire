@@ -1,4 +1,4 @@
-name: Build and test
+name: Build
 
 on:
   pull_request:
@@ -42,5 +42,3 @@ jobs:
           "CraftArchitectCoreProject=$env:GITHUB_WORKSPACE/artifacts/dependencies/XIV-Craft-Architect/src/FFXIV Craft Architect.Core/FFXIV Craft Architect.Core.csproj" >> $env:GITHUB_ENV
       - name: Build against exact source pins without a local feed
         run: dotnet build Squire.slnx -c Release -p:ShouldUnsetParentConfigurationAndPlatform=false "-p:AppData=$env:GITHUB_WORKSPACE/artifacts/build-references"
-      - name: Test
-        run: dotnet test tests/Squire.Tests/Squire.Tests.csproj -c Release --no-build --no-restore

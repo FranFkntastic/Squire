@@ -23,7 +23,6 @@
     <PackageReference Include="Franthropy.Dalamud" Version="[$(FranthropyPackageVersion)]" Condition="'$(FranthropySource)' == 'Package'" />
     <ProjectReference Include="$(FranthropyRoot)/src/Franthropy.Dalamud/Franthropy.Dalamud.csproj" Condition="'$(FranthropySource)' == 'Local'" />
     <ProjectReference Include="$(CraftArchitectCoreProject)" SetConfiguration="Configuration=$(Configuration)" />
-    <InternalsVisibleTo Include="Squire.Tests" />
   </ItemGroup>
 
   <ItemGroup>

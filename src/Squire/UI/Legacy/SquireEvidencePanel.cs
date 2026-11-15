@@ -1,3 +1,4 @@
+using Franthropy.Dalamud.UI.Inputs;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -234,7 +235,7 @@ internal sealed class SquireEvidencePanel(
 
         var minimum = ruleStore.MinimumCopiesToKeep(contentId, itemId, isHighQuality);
         ImGui.SetNextItemWidth(ImGui.GetFontSize() * 8);
-        if (ImGui.InputInt($"Minimum copies to keep##SquireDuplicateMinimum{itemId}{isHighQuality}", ref minimum))
+        if (DalamudGroupedIntegerInput.InputGroupedInt($"Minimum copies to keep##SquireDuplicateMinimum{itemId}{isHighQuality}", ref minimum, 1, 100))
         {
             ruleStore.SetRetention(contentId, itemId, isHighQuality, Math.Clamp(minimum, 0, 99));
             refresh();

@@ -1,3 +1,4 @@
+using Franthropy.Dalamud.UI.Inputs;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -153,7 +154,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         var canEdit = !context.IsBusy && !context.IsRouteActive && !IsSynchronizing;
         if (!canEdit)
             ImGui.BeginDisabled();
-        if (ImGui.InputInt("Price flexibility %##SquireOutfitterFlex", ref flex, 1, 5))
+        if (DalamudGroupedIntegerInput.InputGroupedInt("Price flexibility %##SquireOutfitterFlex", ref flex, 1, 5))
             controller.UpdateOutfitterPriceFlex(flex);
         if (!canEdit)
             ImGui.EndDisabled();
@@ -342,9 +343,9 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             return;
         }
 
-        var quantity = ClampToInt(line.TargetQuantity);
+        long quantity = line.TargetQuantity;
         ImGui.SetNextItemWidth(-1);
-        if (!ImGui.InputInt("##Quantity", ref quantity))
+        if (!DalamudGroupedIntegerInput.InputGroupedInt("##Quantity", ref quantity, 1, 100))
             return;
 
         ApplyLineEdit(
@@ -357,17 +358,17 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     private void DrawCompactUnitCell(MarketAcquisitionRequestLineDocument line, int index)
     {
-        var maxUnit = ClampToInt(line.MaxUnitPrice);
+        long maxUnit = line.MaxUnitPrice;
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputInt("##Unit", ref maxUnit))
+        if (DalamudGroupedIntegerInput.InputGroupedInt("##Unit", ref maxUnit, 1, 100))
             ApplyLineEdit(index, line, maxUnitPrice: ClampToUInt(maxUnit), message: "Unit ceiling updated.");
     }
 
     private void DrawCompactSpendCell(MarketAcquisitionRequestLineDocument line, int index)
     {
-        var gilCap = ClampToInt(line.GilCap);
+        long gilCap = line.GilCap;
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputInt("##Spend", ref gilCap))
+        if (DalamudGroupedIntegerInput.InputGroupedInt("##Spend", ref gilCap, 1, 100))
             ApplyLineEdit(index, line, gilCap: ClampToUInt(gilCap), message: "Spend ceiling updated.");
     }
 
@@ -715,11 +716,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private static uint ParseUInt(string value) =>
         uint.TryParse(value?.Trim(), out var parsed) ? parsed : 0;
 
-    private static int ClampToInt(uint value) =>
-        value > int.MaxValue ? int.MaxValue : (int)value;
-
-    private static uint ClampToUInt(int value) =>
-        value <= 0 ? 0u : (uint)value;
+    private static uint ClampToUInt(long value) =>
+        (uint)Math.Clamp(value, 0L, uint.MaxValue);
 
     private static string FormatLineItemName(MarketAcquisitionRequestLineDocument line) =>
         string.IsNullOrWhiteSpace(line.ItemName)
